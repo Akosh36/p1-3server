@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HA Web Server - Monitoring Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <style>
+        * {
+            --primary: #667eea;
+            --success: #4CAF50;
+            --danger: #f44336;
+            --warning: #ff9800;
+            --info: #2196F3;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar {
+            background: rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 30px;
+        }
+
+        .navbar-brand {
+            font-weight: bold;
+            color: white !important;
+            font-size: 1.5em;
+        }
+
+        .status-badge {
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .status-up {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .status-down {
+            background-color: #f44336;
+            color: white;
+        }
+
+        .status-timeout {
+            background-color: #ff9800;
+            color: white;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            background: rgba(255,255,255,0.95);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 20px;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        .stat-box {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .server-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .server-item:last-child {
+            border-bottom: none;
+        }
+
+        .server-name {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .server-port {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .response-time {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .container-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .container-name {
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .container-status {
+            margin: 0 10px;
+        }
+
+        .cpu-bar, .memory-bar {
+            height: 6px;
+            background: #ddd;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .cpu-fill {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 100%;
+            transition: width 0.3s;
+        }
+
+        .memory-fill {
+            background: linear-gradient(90deg, #ff6b6b, #ee5a6f);
+            height: 100%;
+            transition: width 0.3s;
+        }
+
+        .alert-custom {
+            border: none;
+            border-left: 4px solid;
+            border-radius: 8px;
+        }
+
+        .alert-success {
+            background: rgba(76, 175, 80, 0.1);
+            border-left-color: #4CAF50;
+            color: #2e7d32;
+        }
+
+        .alert-danger {
+            background: rgba(244, 67, 54, 0.1);
+            border-left-color: #f44336;
+            color: #c62828;
+        }
+
+        .alert-warning {
+            background: rgba(255, 152, 0, 0.1);
+            border-left-color: #ff9800;
+            color: #e65100;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+            margin-top: 20px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .info-label {
+            font-size: 0.85em;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #333;
+            word-break: break-all;
+        }
+
+        .health-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .health-indicator.up {
+            background-color: #4CAF50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+
+        .health-indicator.down {
+            background-color: #f44336;
+            box-shadow: 0 0 10px rgba(244, 67, 54, 0.5);
+        }
+
+        .update-time {
+            text-align: right;
+            font-size: 0.85em;
+            color: #999;
+            margin-top: 10px;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .header-title h1 {
+            color: white;
+            margin: 0;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .refresh-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+
+        .refresh-btn:hover {
+            background: rgba(255,255,255,0.3);
+            color: white;
+        }
+
+        .spinner-small {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 5px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-dark">
+        <div class="container-fluid">
+            <span class="navbar-brand">
+                <i class="fas fa-chart-pie"></i> HA Web Server Monitoring
+            </span>
+            <div>
+                <button class="btn btn-sm refresh-btn" onclick="manualRefresh()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="container-fluid">
+        <!-- Header -->
+        <div class="header-title">
+            <div>
+                <h1><i class="fas fa-server"></i> Infrastructure Monitoring</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 5px 0 0 0;">Real-time health status and performance metrics</p>
+            </div>
+        </div>
+
+        <!-- Row 1: System & Network Info -->
+        <div class="row">
+            <!-- Host Information -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-desktop"></i> Host Information
+                    </div>
+                    <div class="card-body" id="hostInfo">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Access Points -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-network-wired"></i> Access Points
+                    </div>
+                    <div class="card-body">
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">Load Balancer</div>
+                                <div class="info-value">http://localhost<span class="badge bg-primary ms-2">:80</span></div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Web Server 1</div>
+                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8001</span></div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Web Server 2</div>
+                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8002</span></div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Web Server 3</div>
+                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8003</span></div>
+                            </div>
+                        </div>
+                        <div id="localIpInfo" style="margin-top: 15px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
+                            <div class="info-label">LAN Access</div>
+                            <div class="info-value" id="lanIp" style="font-family: 'Courier New', monospace;">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 2: Load Balancer Status -->
+        <div class="row">
+            <div class="col-lg-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-router"></i> Load Balancer Status
+                    </div>
+                    <div class="card-body" id="loadBalancerStatus">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 3: Backend Servers -->
+        <div class="row">
+            <div class="col-lg-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-server"></i> Backend Servers Health
+                    </div>
+                    <div class="card-body" id="backendServers">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 4: Containers Status -->
+        <div class="row">
+            <div class="col-lg-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-cube"></i> Docker Containers Status
+                    </div>
+                    <div class="card-body" id="containersStatus">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 5: Performance Charts -->
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-tachometer-alt"></i> Response Times
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="responseTimeChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-heartbeat"></i> System Health
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="systemHealthChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Update Time -->
+        <div class="update-time" id="updateTime">
+            Last updated: Loading...
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Chart instances
+        let responseTimeChart = null;
+        let systemHealthChart = null;
+
+        // Data history for charts
+        let chartData = {
+            timestamps: [],
+            responseTimes: { lb: [], s1: [], s2: [], s3: [] },
+            systemMetrics: { cpu: [], memory: [] }
+        };
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function getStatusBadge(status) {
+            if (status === 'UP') {
+                return `<span class="status-badge status-up"><i class="fas fa-check-circle"></i> UP</span>`;
+            } else if (status === 'DOWN') {
+                return `<span class="status-badge status-down"><i class="fas fa-times-circle"></i> DOWN</span>`;
+            } else if (status === 'TIMEOUT') {
+                return `<span class="status-badge status-timeout"><i class="fas fa-clock"></i> TIMEOUT</span>`;
+            }
+            return `<span class="status-badge status-down">UNKNOWN</span>`;
+        }
+
+        function updateHostInfo(data) {
+            const hostData = data.host;
+            if (!hostData) return;
+
+            const html = `
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Hostname</div>
+                        <div class="info-value">${hostData.hostname || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Local IP</div>
+                        <div class="info-value" style="font-family: 'Courier New', monospace;">${hostData.local_ip || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">CPU Usage</div>
+                        <div class="info-value">${hostData.cpu_percent || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Memory Usage</div>
+                        <div class="info-value">${hostData.memory_percent || 'N/A'}</div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <div class="info-label">Memory: ${hostData.memory_mb}MB / ${hostData.memory_total_mb}MB</div>
+                    <div class="cpu-bar" style="margin-top: 5px;">
+                        <div class="memory-fill" style="width: ${hostData.memory_percent || 0}%"></div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <div class="info-label">Disk Usage</div>
+                    <div class="cpu-bar">
+                        <div class="cpu-fill" style="width: ${hostData.disk_percent || 0}%"></div>
+                    </div>
+                    <div style="text-align: right; font-size: 0.9em; color: #999; margin-top: 5px;">${hostData.disk_percent}</div>
+                </div>
+            `;
+            document.getElementById('hostInfo').innerHTML = html;
+            document.getElementById('lanIp').textContent = hostData.local_ip || 'N/A';
+        }
+
+        function updateLoadBalancer(data) {
+            const lb = data.load_balancer || {};
+            const healthClass = lb.healthy ? 'up' : 'down';
+            const statusHtml = getStatusBadge(lb.status || 'UNKNOWN');
+
+            const html = `
+                <div class="alert alert-custom ${lb.healthy ? 'alert-success' : 'alert-danger'}">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <strong>Load Balancer</strong>
+                            <p style="margin: 5px 0 0 0; font-size: 0.9em;">Nginx Reverse Proxy on Port 80</p>
+                        </div>
+                        <div style="text-align: right;">
+                            ${statusHtml}
+                            <div style="margin-top: 8px; font-family: 'Courier New', monospace; font-size: 0.9em;">
+                                Response: <strong>${lb.response_time_ms || 'N/A'}</strong> ms
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="info-grid" style="margin-top: 15px;">
+                    <div class="info-item">
+                        <div class="info-label">URL</div>
+                        <div class="info-value" style="font-size: 0.95em; word-break: break-all;">${lb.url || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Status Code</div>
+                        <div class="info-value">${lb.status_code || 'N/A'}</div>
+                    </div>
+                </div>
+            `;
+            document.getElementById('loadBalancerStatus').innerHTML = html;
+        }
+
+        function updateBackendServers(data) {
+            const servers = data.backends || [];
+            if (servers.length === 0) {
+                document.getElementById('backendServers').innerHTML = '<p>No servers available</p>';
+                return;
+            }
+
+            let html = '<div>';
+            servers.forEach((server, idx) => {
+                const healthClass = server.healthy ? 'up' : 'down';
+                const statusHtml = getStatusBadge(server.status);
+                const alertClass = server.healthy ? 'alert-success' : 'alert-danger';
+
+                html += `
+                    <div class="alert alert-custom ${alertClass}" style="margin-bottom: ${idx === servers.length - 1 ? '0' : '10px'};">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <div style="flex: 1;">
+                                <div style="font-weight: 600; margin-bottom: 5px;">
+                                    <span class="health-indicator ${healthClass}"></span>${server.name}
+                                </div>
+                                <div style="font-size: 0.85em; color: #666;">
+                                    Port: <strong>${server.port}</strong> | URL: <strong style="font-family: 'Courier New', monospace;">${server.url}</strong>
+                                </div>
+                            </div>
+                            <div style="text-align: right;">
+                                ${statusHtml}
+                                <div style="margin-top: 8px; font-family: 'Courier New', monospace; font-size: 0.9em;">
+                                    Response: <strong>${server.response_time_ms}</strong> ms
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            document.getElementById('backendServers').innerHTML = html;
+
+            // Update chart data
+            const now = new Date().toLocaleTimeString();
+            if (chartData.timestamps.length > 20) {
+                chartData.timestamps.shift();
+                chartData.responseTimes.lb.shift();
+                chartData.responseTimes.s1.shift();
+                chartData.responseTimes.s2.shift();
+                chartData.responseTimes.s3.shift();
+            }
+            chartData.timestamps.push(now);
+
+            if (servers[3]) chartData.responseTimes.lb.push(parseFloat(servers[3].response_time_ms) || 0);
+            if (servers[0]) chartData.responseTimes.s1.push(parseFloat(servers[0].response_time_ms) || 0);
+            if (servers[1]) chartData.responseTimes.s2.push(parseFloat(servers[1].response_time_ms) || 0);
+            if (servers[2]) chartData.responseTimes.s3.push(parseFloat(servers[2].response_time_ms) || 0);
+
+            updateResponseTimeChart();
+        }
+
+        function updateContainers(data) {
+            const containers = data.containers || [];
+            if (containers.length === 0) {
+                document.getElementById('containersStatus').innerHTML = '<p>No containers found</p>';
+                return;
+            }
+
+            let html = '<div>';
+            containers.forEach(container => {
+                const isRunning = container.state;
+                const statusClass = isRunning ? 'alert-success' : 'alert-danger';
+                const statusText = isRunning ? 'Running' : container.status;
+
+                html += `
+                    <div class="alert alert-custom ${statusClass}" style="margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <div style="flex: 1;">
+                                <div style="font-weight: 600; margin-bottom: 5px;">
+                                    <span class="health-indicator ${isRunning ? 'up' : 'down'}"></span>${container.name}
+                                </div>
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">
+                                    Image: <strong>${container.image}</strong> | ID: <strong>${container.id}</strong>
+                                </div>
+                                <div style="font-size: 0.85em; color: #666;">
+                                    CPU: <strong>${container.cpu_percent}</strong> | Memory: <strong>${container.memory_mb} MB</strong>
+                                </div>
+                            </div>
+                            <div style="text-align: right;">
+                                <span class="badge ${isRunning ? 'bg-success' : 'bg-danger'}">${statusText}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            document.getElementById('containersStatus').innerHTML = html;
+        }
+
+        function updateResponseTimeChart() {
+            const ctx = document.getElementById('responseTimeChart');
+            if (!ctx) return;
+
+            if (responseTimeChart) {
+                responseTimeChart.data.labels = chartData.timestamps;
+                responseTimeChart.data.datasets[0].data = chartData.responseTimes.lb;
+                responseTimeChart.data.datasets[1].data = chartData.responseTimes.s1;
+                responseTimeChart.data.datasets[2].data = chartData.responseTimes.s2;
+                responseTimeChart.data.datasets[3].data = chartData.responseTimes.s3;
+                responseTimeChart.update();
+            } else {
+                responseTimeChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: chartData.timestamps,
+                        datasets: [
+                            {
+                                label: 'Load Balancer',
+                                data: chartData.responseTimes.lb,
+                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                tension: 0.3,
+                                fill: true
+                            },
+                            {
+                                label: 'Server 1',
+                                data: chartData.responseTimes.s1,
+                                borderColor: '#764ba2',
+                                backgroundColor: 'rgba(118, 75, 162, 0.1)',
+                                tension: 0.3,
+                                fill: true
+                            },
+                            {
+                                label: 'Server 2',
+                                data: chartData.responseTimes.s2,
+                                borderColor: '#2196F3',
+                                backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                                tension: 0.3,
+                                fill: true
+                            },
+                            {
+                                label: 'Server 3',
+                                data: chartData.responseTimes.s3,
+                                borderColor: '#4CAF50',
+                                backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                                tension: 0.3,
+                                fill: true
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: true }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'ms' }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        function updateSystemHealthChart() {
+            const ctx = document.getElementById('systemHealthChart');
+            if (!ctx) return;
+
+            if (systemHealthChart) {
+                systemHealthChart.update();
+            } else {
+                systemHealthChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['CPU Usage', 'Memory Usage', 'Available'],
+                        datasets: [{
+                            data: [30, 40, 30],
+                            backgroundColor: [
+                                '#667eea',
+                                '#764ba2',
+                                '#e0e0e0'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'right' }
+                        }
+                    }
+                });
+            }
+        }
+
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                updateHostInfo(data);
+                updateLoadBalancer(data);
+                updateBackendServers(data);
+                updateContainers(data);
+                updateSystemHealthChart();
+
+                document.getElementById('updateTime').textContent = 
+                    `Last updated: ${data.last_update || 'Loading...'}`;
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        }
+
+        function manualRefresh() {
+            fetchData();
+        }
+
+        // Auto-refresh every 3 seconds
+        setInterval(fetchData, 3000);
+
+        // Initial load
+        fetchData();
+    </script>
+</body>
+</html>

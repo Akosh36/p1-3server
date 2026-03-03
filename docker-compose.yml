@@ -1,0 +1,47 @@
+services:
+  web_server_1:
+    image: nginx:alpine
+    container_name: web_server_1
+    network_mode: host
+    environment:
+      - PORT=8001
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx_backend_server.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  web_server_2:
+    image: nginx:alpine
+    container_name: web_server_2
+    network_mode: host
+    environment:
+      - PORT=8002
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx_backend_server.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  web_server_3:
+    image: nginx:alpine
+    container_name: web_server_3
+    network_mode: host
+    environment:
+      - PORT=8003
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx_backend_server.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  load_balancer:
+    image: nginx:alpine
+    container_name: load_balancer
+    network_mode: host
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web_server_1
+      - web_server_2
+      - web_server_3
+    restart: unless-stopped

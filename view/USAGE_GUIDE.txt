@@ -1,0 +1,370 @@
+═══════════════════════════════════════════════════════════════════════════════
+                  HA WEB SERVER MONITORING DASHBOARD
+                         COMPLETE USAGE GUIDE
+═══════════════════════════════════════════════════════════════════════════════
+
+WHAT WAS CREATED
+═════════════════════════════════════════════════════════════════════════════
+
+✅ A complete monitoring dashboard in Python/Flask with beautiful graphical UI
+✅ Real-time tracking of all containers, servers, and system metrics
+✅ Charts and graphs showing performance data
+✅ Network information display (IPs, ports, URLs)
+✅ Health status indicators for all servers
+✅ Completely separate from main project (in 'view' folder)
+
+═══════════════════════════════════════════════════════════════════════════════
+STEP 1: START THE INFRASTRUCTURE
+═════════════════════════════════════════════════════════════════════════════
+
+Open a Terminal and run:
+
+    cd /path/to/p1-3server
+    ./control-scripts/start.sh
+
+Wait for output showing:
+    ✓ load_balancer
+    ✓ web_server_1  
+    ✓ web_server_2
+    ✓ web_server_3
+
+═══════════════════════════════════════════════════════════════════════════════
+STEP 2: START THE MONITORING DASHBOARD
+═════════════════════════════════════════════════════════════════════════════
+
+In the same directory, open another terminal tab and run:
+
+    cd view
+    ./run.sh
+
+You'll see:
+    ================================================
+    Flask Monitoring Dashboard
+    ================================================
+    🔗 Access the dashboard at:
+       http://localhost:5000
+    
+    💡 Press Ctrl+C to stop
+    ================================================
+
+═══════════════════════════════════════════════════════════════════════════════
+STEP 3: ACCESS THE DASHBOARD
+═════════════════════════════════════════════════════════════════════════════
+
+Open your web browser and go to:
+
+    http://localhost:5000
+
+You should see a beautiful dashboard with:
+    • Green boxes = healthy servers ✓
+    • Red boxes = failed servers ✗
+    • Charts showing performance
+    • All network information
+
+═══════════════════════════════════════════════════════════════════════════════
+WHAT YOU'LL SEE ON THE DASHBOARD
+═════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HOST INFORMATION          ACCESS POINTS                  │
+│                                                                              │
+│  • Hostname                    • Load Balancer: port 80                     │
+│  • Local IP address            • Web Server 1: port 8001                    │
+│  • CPU Usage: 25%              • Web Server 2: port 8002                    │
+│  • Memory Usage: 45%           • Web Server 3: port 8003                    │
+│  • Disk Usage: 60%             • Your LAN IP                                │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                          LOAD BALANCER STATUS                               │
+│                                                                              │
+│  ✅ UP  | Response: 2.45 ms  | Port 80  | Status: 200                     │
+│  The load balancer is healthy and responding to requests                   │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                        BACKEND SERVERS HEALTH                               │
+│                                                                              │
+│  ✅ web_server_1  | Port 8001 | Response: 1.23 ms | Status: 200           │
+│  ✅ web_server_2  | Port 8002 | Response: 1.45 ms | Status: 200           │
+│  ✅ web_server_3  | Port 8003 | Response: 1.19 ms | Status: 200           │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                       DOCKER CONTAINERS STATUS                              │
+│                                                                              │
+│  ✅ load_balancer | Running | CPU: 2.3% | Memory: 45 MB                   │
+│  ✅ web_server_1  | Running | CPU: 0.1% | Memory: 12 MB                   │
+│  ✅ web_server_2  | Running | CPU: 0.1% | Memory: 12 MB                   │
+│  ✅ web_server_3  | Running | CPU: 0.1% | Memory: 12 MB                   │
+│                                                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                          PERFORMANCE CHARTS                                 │
+│                                                                              │
+│  • Response Times: Line graph showing trends over time                      │
+│  • System Health: Pie chart showing resource usage                          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+TESTING FAILOVER WITH THE DASHBOARD
+═════════════════════════════════════════════════════════════════════════════
+
+💡 TEST 1: Stop a Single Server
+
+In a NEW terminal tab:
+    cd control-scripts
+    ./stop1.sh
+
+In the dashboard, watch:
+    • web_server_1 turns RED ❌
+    • Response times increase
+    • Charts update in real-time
+    • Load balancer still shows UP ✅
+    • Traffic routes to servers 2 & 3
+
+Restart it:
+    ./start1.sh
+
+Watch it turn GREEN ✅ again
+
+───────────────────────────────────────────────────────────────────────────────
+
+💡 TEST 2: Multiple Failures
+
+In terminal:
+    ./stop1.sh
+    ./stop2.sh
+
+In dashboard:
+    • Two servers RED, one GREEN
+    • Load balancer still responding
+    • All traffic on server 3
+    • Response times stable
+
+───────────────────────────────────────────────────────────────────────────────
+
+💡 TEST 3: Complete Outage
+
+In terminal:
+    ./stop1.sh
+    ./stop2.sh
+    ./stop3.sh
+
+In dashboard:
+    • All servers RED
+    • Load balancer still shows UP (it's trying)
+    • No healthy backends
+    • Still shows errors
+
+Restart:
+    ./start1.sh
+    ./start2.sh
+    ./start3.sh
+
+Watch everything turn GREEN ✅ again
+
+═══════════════════════════════════════════════════════════════════════════════
+DASHBOARD UPDATES
+═════════════════════════════════════════════════════════════════════════════
+
+• Updates automatically every 3 seconds
+• Charts refresh in real-time
+• No need to refresh browser manually
+• All data is live and current
+
+═══════════════════════════════════════════════════════════════════════════════
+NETWORK ACCESS
+═════════════════════════════════════════════════════════════════════════════
+
+FROM YOUR COMPUTER (localhost):
+    • Dashboard:        http://localhost:5000
+    • Load Balancer:    http://localhost
+    • Server 1:         http://localhost:8001
+    • Server 2:         http://localhost:8002
+    • Server 3:         http://localhost:8003
+
+FROM ANOTHER COMPUTER ON LAN:
+    • Find your IP:     hostname -I
+    • Dashboard:        http://192.168.x.x:5000
+    • Load Balancer:    http://192.168.x.x
+    • Servers:          http://192.168.x.x:8001, :8002, :8003
+
+═══════════════════════════════════════════════════════════════════════════════
+COLOR MEANINGS
+═════════════════════════════════════════════════════════════════════════════
+
+🟢 GREEN (✅ UP):     Server is healthy and responding
+🔴 RED (❌ DOWN):     Server is not responding
+🟠 ORANGE (⏱️ TIMEOUT): Request took too long
+🔵 BLUE:              Information, no status indication
+
+═══════════════════════════════════════════════════════════════════════════════
+UNDERSTANDING THE CHARTS
+═════════════════════════════════════════════════════════════════════════════
+
+Response Time Chart (Line Graph):
+    • Y-axis: Response time in milliseconds
+    • X-axis: Time
+    • Each line = different server
+    • Climbing lines = servers slowing down
+    • Jumps = failover events
+
+System Health Chart (Pie Chart):
+    • Shows CPU usage %
+    • Shows Memory usage %
+    • Shows Available resources %
+    • Larger slices = higher usage
+
+═══════════════════════════════════════════════════════════════════════════════
+MONITORING INSTRUMENTS EXPLAINED
+═════════════════════════════════════════════════════════════════════════════
+
+Response Time:
+    • Measured in milliseconds (ms)
+    • Lower is better (typical: 1-50ms)
+    • High values = server lag or failure
+
+Status Code:
+    • 200 = OK (healthy response)
+    • 0 or error = server not responding
+    • Anything else = server issue
+
+CPU %:
+    • Container processor usage
+    • Usually 0-5% for light load
+    • Over 50% = heavily loaded
+
+Memory MB:
+    • RAM used by container
+    • 40-80MB typical for nginx
+    • Growing = memory leak
+
+Health Indicator:
+    • Green pulsing dot = alive
+    • Red = dead
+    • Pulsing = real-time updates
+
+═══════════════════════════════════════════════════════════════════════════════
+STOPPING THE DASHBOARD
+═════════════════════════════════════════════════════════════════════════════
+
+In the terminal running the dashboard:
+    Press: Ctrl+C
+
+The web servers continue running normally! Only the monitoring stops.
+
+═══════════════════════════════════════════════════════════════════════════════
+STOPPING THE INFRASTRUCTURE
+═════════════════════════════════════════════════════════════════════════════
+
+In another terminal:
+    cd control-scripts
+    ./stop.sh
+
+This stops the web servers and load balancer.
+
+═══════════════════════════════════════════════════════════════════════════════
+KEY FEATURES SUMMARY
+═════════════════════════════════════════════════════════════════════════════
+
+✅ Real-Time Monitoring
+   - Updates every 3 seconds
+   - No delays or buffering
+   - Live data display
+
+✅ Complete Status Information
+   - Container running status
+   - Server health checks
+   - Response times
+   - System metrics
+
+✅ Beautiful Visual Design
+   - Modern responsive UI
+   - Color-coded status
+   - Charts and graphs
+   - Professional styling
+
+✅ Network Information
+   - Display all ports
+   - Show IP addresses
+   - LAN access URLs
+   - Direct server links
+
+✅ Non-Intrusive
+   - Doesn't modify infrastructure
+   - Runs separately
+   - Can stop/start anytime
+   - No side effects
+
+═══════════════════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+═════════════════════════════════════════════════════════════════════════════
+
+Problem: Dashboard shows all servers DOWN
+Solution: 
+    1. Wait 5-10 seconds
+    2. Refresh browser (F5)
+    3. Verify containers running: docker ps
+
+Problem: Can't access dashboard
+Solution:
+    1. Check Flask is running (see terminal output)
+    2. Try http://localhost:5000
+    3. Check port 5000 is not in use
+
+Problem: Connection refused errors
+Solution:
+    1. Start infrastructure: ./control-scripts/start.sh
+    2. Wait for containers to start
+    3. Then start dashboard
+
+Problem: Can't access from another machine
+Solution:
+    1. Find local IP: hostname -I
+    2. Use: http://<your-ip>:5000
+    3. Ensure firewall allows port 5000
+
+═══════════════════════════════════════════════════════════════════════════════
+COMPLETE WORKFLOW EXAMPLE
+═════════════════════════════════════════════════════════════════════════════
+
+Terminal 1:
+    $ cd control-scripts
+    $ ./start.sh
+    ✓ All containers started
+
+Terminal 2:
+    $ cd view
+    $ ./run.sh
+    🔗 Access at: http://localhost:5000
+
+Browser:
+    http://localhost:5000
+    → Beautiful dashboard appears
+    → All servers showing GREEN ✅
+    → Charts active
+
+Terminal 3 (for testing):
+    $ cd control-scripts
+    $ ./stop1.sh
+    
+Browser:
+    → web_server_1 turns RED ❌
+    → Charts update
+    → Response times change
+
+Terminal 3:
+    $ ./start1.sh
+
+Browser:
+    → web_server_1 turns GREEN ✅
+    → Charts normalize
+    → Everything back to normal
+
+Press Ctrl+C in Terminal 2:
+    Dashboard stops
+    Infrastructure continues running
+
+═══════════════════════════════════════════════════════════════════════════════
+
+That's it! Enjoy your monitoring dashboard! 🎉
+
+For more information, see: view/README.md
