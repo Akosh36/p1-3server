@@ -58,6 +58,52 @@ case $ACTION in
         fi
         ;;
 
+    network)
+        echo "Network statistics for $HOST_IP:"
+        if [ "$HOST_IP" = "127.0.0.1" ] || [ "$HOST_IP" = "localhost" ]; then
+            echo "Network interfaces:"
+            ip addr show | grep -E "(inet|link)" | head -10
+            echo ""
+            echo "Routing table:"
+            ip route | head -5
+            echo ""
+            echo "Network connections:"
+            netstat -tuln | head -10
+        else
+            echo "Remote network monitoring requires SSH access"
+        fi
+        ;;
+
+    ports)
+        echo "Open ports on $HOST_IP:"
+        if [ "$HOST_IP" = "127.0.0.1" ] || [ "$HOST_IP" = "localhost" ]; then
+            echo "Listening ports:"
+            netstat -tuln | grep LISTEN | head -10
+            echo ""
+            echo "Common service ports check:"
+            for port in 22 80 443 8001 8002 8003 8080 3306 5432; do
+                if timeout 3 bash -c "echo > /dev/tcp/localhost/$port" 2>/dev/null; then
+                    echo "✓ Port $port is open"
+                fi
+            done
+        else
+            echo "Remote port scanning requires SSH access"
+        fi
+        ;;
+
+    processes)
+        echo "Process list for $HOST_IP:"
+        if [ "$HOST_IP" = "127.0.0.1" ] || [ "$HOST_IP" = "localhost" ]; then
+            echo "Top processes by CPU:"
+            ps aux --sort=-%cpu | head -10
+            echo ""
+            echo "Top processes by memory:"
+            ps aux --sort=-%mem | head -10
+        else
+            echo "Remote process monitoring requires SSH access"
+        fi
+        ;;
+
     system)
         echo "System information for $HOST_IP:"
         if [ "$HOST_IP" = "127.0.0.1" ] || [ "$HOST_IP" = "localhost" ]; then
@@ -88,6 +134,9 @@ case $ACTION in
         echo "  ping      - Ping the host"
         echo "  ssh-check - Check SSH connectivity"
         echo "  services  - Check service availability"
+        echo "  network   - Show network statistics"
+        echo "  ports     - Show open ports"
+        echo "  processes - Show process list"
         echo "  system    - Show system information"
         echo "  all       - Run all checks (default)"
         exit 1
