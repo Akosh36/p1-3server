@@ -17,7 +17,7 @@ else
     python3 -m venv venv
     source venv/bin/activate
     echo "Installing dependencies..."
-    pip install -q Flask docker requests psutil Werkzeug
+    pip install -r requirements.txt
 fi
 
 echo "================================================"
@@ -33,6 +33,10 @@ echo "   ✓ Server health monitoring"
 echo "   ✓ Performance metrics & charts"
 echo "   ✓ Response time tracking"
 echo "   ✓ System resource usage"
+echo "   ✓ Server management & control"
+echo "   ✓ File upload capabilities"
+echo "   ✓ Load balancer configuration"
+echo "   ✓ Host monitoring tools"
 echo ""
 echo "💡 Press Ctrl+C to stop"
 echo "================================================"

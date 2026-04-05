@@ -26,6 +26,7 @@ http {
 
     # Upstream block defining backend servers with health check parameters
     upstream backend {
+        server 127.0.0.1:8027 max_fails=3 fail_timeout=10s;
         # Load balancing method: round_robin (default)
         # Health check parameters:
         # - max_fails: Number of failed requests before marking server as down (3)
@@ -35,8 +36,9 @@ http {
         # Keep connections alive to backend servers
 
 
-
-        server 127.0.0.1:8027 max_fails=3 fail_timeout=10s;
+        server 127.0.0.1:8000 max_fails=3 fail_timeout=10s;
+        server 127.0.0.1:8010 max_fails=3 fail_timeout=10s;
+        server 127.0.0.1:8030 max_fails=3 fail_timeout=10s;
 
         keepalive 32;
     }

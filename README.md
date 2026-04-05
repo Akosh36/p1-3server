@@ -351,7 +351,99 @@ docker image prune
 
 ---
 
-## Troubleshooting
+## Web-Based Management Interface
+
+This project includes a comprehensive web-based management interface integrated into the monitoring dashboard for controlling and monitoring all servers through a browser.
+
+### Features
+
+✅ **Server Control:** Start, stop, and restart individual servers or all servers at once  
+✅ **Server Management:** Add new backend servers dynamically  
+✅ **File Upload:** Upload HTML files to servers through the web interface  
+✅ **Load Balancer Config:** Add/remove servers from load balancer, change balancing methods  
+✅ **Host Monitoring:** Monitor remote hosts, check services, system information  
+✅ **SSH Access:** Prepare SSH connections to remote hosts  
+✅ **Real-time Monitoring:** Live system metrics and container status  
+✅ **Unified Interface:** All monitoring and management in one dashboard  
+
+### Starting the Management Interface
+
+```bash
+cd view
+./run.sh
+```
+Access at: **http://localhost:5000**
+
+### Management Interface Overview
+
+#### Monitoring Dashboard
+- **Real-time Metrics:** System CPU, memory, disk usage
+- **Container Status:** Live Docker container health and status
+- **Server Health:** Backend server availability and response times
+- **Performance Charts:** Response time tracking and system health graphs
+
+#### Server Management Panel
+- **Server Control:** Start/stop/restart servers with one click
+- **Add Servers:** Dynamically add new backend servers with custom ports
+- **File Upload:** Upload HTML files to servers through the browser
+- **Load Balancing:** Configure upstream servers and balancing methods
+
+#### Host Monitoring Tools
+- **Network Checks:** Ping tests and connectivity verification
+- **Service Monitoring:** Check web server and Docker availability
+- **System Information:** CPU, memory, disk usage for remote hosts
+- **SSH Preparation:** Generate SSH commands for remote access
+
+#### Host Monitoring
+- **Ping Tests:** Check host connectivity
+- **Service Checks:** Verify web server and Docker availability
+- **System Information:** CPU, memory, disk usage
+- **SSH Preparation:** Generate SSH commands for remote access
+
+#### Real-time Dashboard
+- **System Metrics:** Live CPU, memory, disk usage
+- **Container Status:** Real-time container health and status
+- **Server Status Cards:** Visual representation of all servers
+
+### Using Management Scripts Directly
+
+All web interface functions are backed by shell scripts in `control-scripts/`:
+
+```bash
+# Server control
+./control-scripts/start_servers.sh all     # Start all servers
+./control-scripts/stop_servers.sh 1        # Stop server 1
+./control-scripts/restart_servers.sh lb    # Restart load balancer
+
+# Server management
+./control-scripts/add_server.sh 4 8004    # Add server 4 on port 8004
+
+# File upload
+./control-scripts/upload_html.sh newpage.html all  # Upload to all servers
+
+# Load balancer
+./control-scripts/configure_load_balancer.sh add-server 127.0.0.1 8004
+./control-scripts/configure_load_balancer.sh set-method least_conn
+
+# Host monitoring
+./control-scripts/monitor_hosts.sh 192.168.1.100 all
+./control-scripts/ssh_login.sh 192.168.1.100 admin 22
+```
+
+### Management Scripts Reference
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `start_servers.sh` | Start servers | `./start_servers.sh [1\|2\|3\|all\|lb]` |
+| `stop_servers.sh` | Stop servers | `./stop_servers.sh [1\|2\|3\|all\|lb]` |
+| `restart_servers.sh` | Restart servers | `./restart_servers.sh [1\|2\|3\|all\|lb]` |
+| `add_server.sh` | Add new server | `./add_server.sh <num> <port>` |
+| `upload_html.sh` | Upload HTML files | `./upload_html.sh <file> [server\|all]` |
+| `configure_load_balancer.sh` | Configure LB | `./configure_load_balancer.sh <action> [params]` |
+| `monitor_hosts.sh` | Monitor hosts | `./monitor_hosts.sh <ip> [action]` |
+| `ssh_login.sh` | SSH login prep | `./ssh_login.sh <ip> [user] [port]` |
+
+---
 
 ### Issue: "Connection refused" on `curl http://localhost`
 

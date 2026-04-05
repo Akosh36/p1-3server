@@ -6,7 +6,6 @@
     <title>HA Web Server - Monitoring Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     <style>
         * {
             --primary: #667eea;
@@ -192,12 +191,6 @@
             color: #e65100;
         }
 
-        .chart-container {
-            position: relative;
-            height: 250px;
-            margin-top: 20px;
-        }
-
         .info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -326,46 +319,21 @@
             </div>
         </div>
 
-        <!-- Row 1: System & Network Info -->
+        <!-- Row 1: Network Info -->
         <div class="row">
-            <!-- Host Information -->
-            <div class="col-lg-6">
-                <div class="card">
-                    <div class="card-header">
-                        <i class="fas fa-desktop"></i> Host Information
-                    </div>
-                    <div class="card-body" id="hostInfo">
-                        <div class="spinner-border" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Access Points -->
-            <div class="col-lg-6">
+            <div class="col-lg-12">
                 <div class="card">
                     <div class="card-header">
                         <i class="fas fa-network-wired"></i> Access Points
                     </div>
                     <div class="card-body">
-                        <div class="info-grid">
+                        <div class="info-grid" id="accessPoints">
                             <div class="info-item">
                                 <div class="info-label">Load Balancer</div>
                                 <div class="info-value">http://localhost<span class="badge bg-primary ms-2">:80</span></div>
                             </div>
-                            <div class="info-item">
-                                <div class="info-label">Web Server 1</div>
-                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8001</span></div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">Web Server 2</div>
-                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8002</span></div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">Web Server 3</div>
-                                <div class="info-value">localhost<span class="badge bg-info ms-2">:8003</span></div>
-                            </div>
+                            <!-- Dynamic server entries will be added here -->
                         </div>
                         <div id="localIpInfo" style="margin-top: 15px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
                             <div class="info-label">LAN Access</div>
@@ -392,23 +360,7 @@
             </div>
         </div>
 
-        <!-- Row 3: Backend Servers -->
-        <div class="row">
-            <div class="col-lg-12">
-                <div class="card">
-                    <div class="card-header">
-                        <i class="fas fa-server"></i> Backend Servers Health
-                    </div>
-                    <div class="card-body" id="backendServers">
-                        <div class="spinner-border" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Row 4: Containers Status -->
+        <!-- Row 3: Containers Status -->
         <div class="row">
             <div class="col-lg-12">
                 <div class="card">
@@ -424,35 +376,6 @@
             </div>
         </div>
 
-        <!-- Row 5: Performance Charts -->
-        <div class="row">
-            <div class="col-lg-6">
-                <div class="card">
-                    <div class="card-header">
-                        <i class="fas fa-tachometer-alt"></i> Response Times
-                    </div>
-                    <div class="card-body">
-                        <div class="chart-container">
-                            <canvas id="responseTimeChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-lg-6">
-                <div class="card">
-                    <div class="card-header">
-                        <i class="fas fa-heartbeat"></i> System Health
-                    </div>
-                    <div class="card-body">
-                        <div class="chart-container">
-                            <canvas id="systemHealthChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Update Time -->
         <div class="update-time" id="updateTime">
             Last updated: Loading...
@@ -461,17 +384,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Chart instances
-        let responseTimeChart = null;
-        let systemHealthChart = null;
-
-        // Data history for charts
-        let chartData = {
-            timestamps: [],
-            responseTimes: { lb: [], s1: [], s2: [], s3: [] },
-            systemMetrics: { cpu: [], memory: [] }
-        };
-
         function formatBytes(bytes) {
             if (bytes === 0) return '0 Bytes';
             const k = 1024;
@@ -566,62 +478,6 @@
             document.getElementById('loadBalancerStatus').innerHTML = html;
         }
 
-        function updateBackendServers(data) {
-            const servers = data.backends || [];
-            if (servers.length === 0) {
-                document.getElementById('backendServers').innerHTML = '<p>No servers available</p>';
-                return;
-            }
-
-            let html = '<div>';
-            servers.forEach((server, idx) => {
-                const healthClass = server.healthy ? 'up' : 'down';
-                const statusHtml = getStatusBadge(server.status);
-                const alertClass = server.healthy ? 'alert-success' : 'alert-danger';
-
-                html += `
-                    <div class="alert alert-custom ${alertClass}" style="margin-bottom: ${idx === servers.length - 1 ? '0' : '10px'};">
-                        <div style="display: flex; align-items: center; justify-content: space-between;">
-                            <div style="flex: 1;">
-                                <div style="font-weight: 600; margin-bottom: 5px;">
-                                    <span class="health-indicator ${healthClass}"></span>${server.name}
-                                </div>
-                                <div style="font-size: 0.85em; color: #666;">
-                                    Port: <strong>${server.port}</strong> | URL: <strong style="font-family: 'Courier New', monospace;">${server.url}</strong>
-                                </div>
-                            </div>
-                            <div style="text-align: right;">
-                                ${statusHtml}
-                                <div style="margin-top: 8px; font-family: 'Courier New', monospace; font-size: 0.9em;">
-                                    Response: <strong>${server.response_time_ms}</strong> ms
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            document.getElementById('backendServers').innerHTML = html;
-
-            // Update chart data
-            const now = new Date().toLocaleTimeString();
-            if (chartData.timestamps.length > 20) {
-                chartData.timestamps.shift();
-                chartData.responseTimes.lb.shift();
-                chartData.responseTimes.s1.shift();
-                chartData.responseTimes.s2.shift();
-                chartData.responseTimes.s3.shift();
-            }
-            chartData.timestamps.push(now);
-
-            if (servers[3]) chartData.responseTimes.lb.push(parseFloat(servers[3].response_time_ms) || 0);
-            if (servers[0]) chartData.responseTimes.s1.push(parseFloat(servers[0].response_time_ms) || 0);
-            if (servers[1]) chartData.responseTimes.s2.push(parseFloat(servers[1].response_time_ms) || 0);
-            if (servers[2]) chartData.responseTimes.s3.push(parseFloat(servers[2].response_time_ms) || 0);
-
-            updateResponseTimeChart();
-        }
-
         function updateContainers(data) {
             const containers = data.containers || [];
             if (containers.length === 0) {
@@ -660,103 +516,25 @@
             document.getElementById('containersStatus').innerHTML = html;
         }
 
-        function updateResponseTimeChart() {
-            const ctx = document.getElementById('responseTimeChart');
-            if (!ctx) return;
-
-            if (responseTimeChart) {
-                responseTimeChart.data.labels = chartData.timestamps;
-                responseTimeChart.data.datasets[0].data = chartData.responseTimes.lb;
-                responseTimeChart.data.datasets[1].data = chartData.responseTimes.s1;
-                responseTimeChart.data.datasets[2].data = chartData.responseTimes.s2;
-                responseTimeChart.data.datasets[3].data = chartData.responseTimes.s3;
-                responseTimeChart.update();
-            } else {
-                responseTimeChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: chartData.timestamps,
-                        datasets: [
-                            {
-                                label: 'Load Balancer',
-                                data: chartData.responseTimes.lb,
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                                tension: 0.3,
-                                fill: true
-                            },
-                            {
-                                label: 'Server 1',
-                                data: chartData.responseTimes.s1,
-                                borderColor: '#764ba2',
-                                backgroundColor: 'rgba(118, 75, 162, 0.1)',
-                                tension: 0.3,
-                                fill: true
-                            },
-                            {
-                                label: 'Server 2',
-                                data: chartData.responseTimes.s2,
-                                borderColor: '#2196F3',
-                                backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                                tension: 0.3,
-                                fill: true
-                            },
-                            {
-                                label: 'Server 3',
-                                data: chartData.responseTimes.s3,
-                                borderColor: '#4CAF50',
-                                backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                                tension: 0.3,
-                                fill: true
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: true }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                title: { display: true, text: 'ms' }
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        function updateSystemHealthChart() {
-            const ctx = document.getElementById('systemHealthChart');
-            if (!ctx) return;
-
-            if (systemHealthChart) {
-                systemHealthChart.update();
-            } else {
-                systemHealthChart = new Chart(ctx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: ['CPU Usage', 'Memory Usage', 'Available'],
-                        datasets: [{
-                            data: [30, 40, 30],
-                            backgroundColor: [
-                                '#667eea',
-                                '#764ba2',
-                                '#e0e0e0'
-                            ]
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { position: 'right' }
-                        }
-                    }
-                });
-            }
+        function updateAccessPoints(data) {
+            const servers = data.servers_status || [];
+            const accessPointsDiv = document.getElementById('accessPoints');
+            
+            // Clear existing server entries (keep the load balancer)
+            const loadBalancerItem = accessPointsDiv.querySelector('.info-item');
+            accessPointsDiv.innerHTML = '';
+            accessPointsDiv.appendChild(loadBalancerItem);
+            
+            // Add dynamic server entries
+            servers.forEach(server => {
+                const serverItem = document.createElement('div');
+                serverItem.className = 'info-item';
+                serverItem.innerHTML = `
+                    <div class="info-label">Web Server ${server.name.split('_')[2]}</div>
+                    <div class="info-value">localhost<span class="badge bg-info ms-2">:${server.port}</span></div>
+                `;
+                accessPointsDiv.appendChild(serverItem);
+            });
         }
 
         async function fetchData() {
@@ -766,9 +544,8 @@
                 
                 updateHostInfo(data);
                 updateLoadBalancer(data);
-                updateBackendServers(data);
                 updateContainers(data);
-                updateSystemHealthChart();
+                updateAccessPoints(data);
 
                 document.getElementById('updateTime').textContent = 
                     `Last updated: ${data.last_update || 'Loading...'}`;
@@ -786,6 +563,375 @@
 
         // Initial load
         fetchData();
+    </script>
+
+    <!-- Management Section -->
+    <div class="row" style="margin-top: 30px;">
+        <div class="col-lg-12">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-cogs"></i> Server Management
+                </div>
+                <div class="card-body">
+                    <!-- Server Control -->
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <h5><i class="fas fa-play"></i> Server Control</h5>
+                            <form id="start-server-form" class="mb-3">
+                                <div class="input-group">
+                                    <input type="number" id="start-server-num" class="form-control" placeholder="Server #" min="1" required>
+                                    <button type="button" class="btn btn-success" onclick="controlServer('start')">
+                                        <i class="fas fa-play"></i> Start
+                                    </button>
+                                </div>
+                            </form>
+
+                            <form id="stop-server-form" class="mb-3">
+                                <div class="input-group">
+                                    <input type="number" id="stop-server-num" class="form-control" placeholder="Server #" min="1" required>
+                                    <button type="button" class="btn btn-danger" onclick="controlServer('stop')">
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                </div>
+                            </form>
+
+                            <form id="restart-server-form" class="mb-3">
+                                <div class="input-group">
+                                    <input type="number" id="restart-server-num" class="form-control" placeholder="Server #" min="1" required>
+                                    <button type="button" class="btn btn-primary" onclick="controlServer('restart')">
+                                        <i class="fas fa-sync"></i> Restart
+                                    </button>
+                                </div>
+                            </form>
+                            <div id="server-control-output" class="mt-3" style="display: none;"></div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <h5><i class="fas fa-plus"></i> Add New Server</h5>
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <input type="number" id="server-num" class="form-control" placeholder="Server #" min="4" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <input type="number" id="server-port" class="form-control" placeholder="Port" min="8000" max="8999" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <button type="button" class="btn btn-primary w-100" onclick="addNewServer()">
+                                        <i class="fas fa-plus"></i> Add
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="add-server-output" class="mt-3" style="display: none;"></div>
+                        </div>
+                        </div>
+                    </div>
+
+                    <!-- Load Balancer Management -->
+                    <div class="row mb-4">
+                        <div class="col-md-12">
+                            <h5><i class="fas fa-balance-scale"></i> Load Balancer Management</h5>
+                            <div class="card">
+                                <div class="card-body">
+                                    <p class="text-muted">Automatically discover all running web servers and update the load balancer configuration.</p>
+                                    <form method="post" action="/load-balancer/update">
+                                        <button type="submit" class="btn btn-warning">
+                                            <i class="fas fa-sync-alt"></i> Update Load Balancer
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Host Monitoring -->
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h5><i class="fas fa-chart-line"></i> System Monitoring</h5>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <i class="fas fa-microchip"></i> CPU & Memory
+                                        </div>
+                                        <div class="card-body">
+                                            <form id="system-monitor-form">
+                                                <div class="input-group mb-3">
+                                                    <input type="text" id="monitor-host-ip" class="form-control" placeholder="Host IP" value="127.0.0.1">
+                                                    <button type="button" class="btn btn-primary" onclick="runSystemMonitoring()">
+                                                        <i class="fas fa-chart-bar"></i> Monitor System
+                                                    </button>
+                                                </div>
+                                            </form>
+                                            <div id="system-monitor-output">
+                                                <div class="text-muted">Click "Monitor System" to check CPU, memory, and system stats</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <i class="fas fa-network-wired"></i> Network & Services
+                                        </div>
+                                        <div class="card-body">
+                                            <form id="network-monitor-form">
+                                                <div class="input-group mb-3">
+                                                    <input type="text" id="network-host-ip" class="form-control" placeholder="Host IP" value="127.0.0.1">
+                                                    <select id="network-monitor-action" class="form-select">
+                                                        <option value="network">Network Stats</option>
+                                                        <option value="services">Running Services</option>
+                                                        <option value="ports">Open Ports</option>
+                                                        <option value="processes">Process List</option>
+                                                    </select>
+                                                    <button type="button" class="btn btn-info" onclick="runNetworkMonitoring()">
+                                                        <i class="fas fa-search"></i> Check
+                                                    </button>
+                                                </div>
+                                            </form>
+                                            <div id="network-monitor-output" class="alert alert-secondary" style="display: none; white-space: pre-line; font-family: 'Courier New', monospace; font-size: 0.9em;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flash Messages -->
+    <div id="flash-messages" style="position: fixed; top: 20px; right: 20px; z-index: 9999;">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }} alert-dismissible fade show" role="alert" style="min-width: 300px;">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <script>
+        function runSystemMonitoring() {
+            const hostIp = document.getElementById('monitor-host-ip').value;
+            const outputDiv = document.getElementById('system-monitor-output');
+
+            // Show loading
+            outputDiv.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> Checking system...</div>';
+
+            fetch('/api/system-info')
+            .then(response => response.json())
+            .then(data => {
+                const systemInfo = data.system_info;
+                const html = `
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-microchip"></i> CPU Information</h6>
+                            <div class="mb-2">
+                                <strong>Usage:</strong> ${systemInfo.cpu_percent || 'N/A'}%
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar bg-primary" style="width: ${systemInfo.cpu_percent || 0}%"></div>
+                                </div>
+                            </div>
+                            <div class="mb-2"><strong>Cores:</strong> ${systemInfo.cpu_count || 'N/A'}</div>
+                            <div class="mb-2"><strong>Load Average:</strong> ${systemInfo.load_avg || 'N/A'}</div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-memory"></i> Memory Information</h6>
+                            <div class="mb-2">
+                                <strong>Usage:</strong> ${systemInfo.memory_percent || 'N/A'}%
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar bg-success" style="width: ${systemInfo.memory_percent || 0}%"></div>
+                                </div>
+                            </div>
+                            <div class="mb-2"><strong>Used:</strong> ${formatBytes(systemInfo.memory_used || 0)}</div>
+                            <div class="mb-2"><strong>Total:</strong> ${formatBytes(systemInfo.memory_total || 0)}</div>
+                        </div>
+                    </div>
+                    <div class="row mt-3">
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-hdd"></i> Disk Information</h6>
+                            <div class="mb-2"><strong>Used:</strong> ${formatBytes(systemInfo.disk_used || 0)}</div>
+                            <div class="mb-2"><strong>Total:</strong> ${formatBytes(systemInfo.disk_total || 0)}</div>
+                            <div class="mb-2"><strong>Free:</strong> ${formatBytes(systemInfo.disk_free || 0)}</div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-clock"></i> System Info</h6>
+                            <div class="mb-2"><strong>Uptime:</strong> ${systemInfo.uptime || 'N/A'}</div>
+                            <div class="mb-2"><strong>Processes:</strong> ${systemInfo.process_count || 'N/A'}</div>
+                            <div class="mb-2"><strong>OS:</strong> ${systemInfo.os_info || 'N/A'}</div>
+                        </div>
+                    </div>
+                `;
+                outputDiv.innerHTML = html;
+            })
+            .catch(error => {
+                outputDiv.innerHTML = '<div class="alert alert-danger">Error loading system information: ' + error.message + '</div>';
+            });
+        }
+
+        function runNetworkMonitoring() {
+            const hostIp = document.getElementById('network-host-ip').value;
+            const action = document.getElementById('network-monitor-action').value;
+            const outputDiv = document.getElementById('network-monitor-output');
+
+            const formData = new FormData();
+            formData.append('host_ip', hostIp);
+            formData.append('action', action);
+
+            outputDiv.style.display = 'block';
+            outputDiv.className = 'alert alert-info';
+            outputDiv.textContent = 'Checking ' + action.replace('_', ' ') + '...';
+
+            fetch('/monitoring/hosts', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.className = 'alert alert-success';
+                outputDiv.textContent = data.output;
+            })
+            .catch(error => {
+                outputDiv.className = 'alert alert-danger';
+                outputDiv.textContent = 'Error: ' + error.message;
+            });
+        }
+
+        function runMonitoring() {
+            const hostIp = document.getElementById('host-ip').value;
+            const action = document.getElementById('monitor-action').value;
+            const outputDiv = document.getElementById('monitor-output');
+
+            const formData = new FormData();
+            formData.append('host_ip', hostIp);
+            formData.append('action', action);
+
+            fetch('/monitoring/hosts', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.style.display = 'block';
+                outputDiv.textContent = data.output;
+            })
+            .catch(error => {
+                outputDiv.style.display = 'block';
+                outputDiv.textContent = 'Error: ' + error.message;
+            });
+        }
+
+        function addNewServer() {
+            const serverNum = document.getElementById('server-num').value;
+            const serverPort = document.getElementById('server-port').value;
+            const outputDiv = document.getElementById('add-server-output');
+
+            if (!serverNum || !serverPort) {
+                outputDiv.style.display = 'block';
+                outputDiv.innerHTML = '<div class="alert alert-danger">Please enter both server number and port</div>';
+                return;
+            }
+
+            // Disable the button during processing
+            const button = event.target;
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+
+            const formData = new FormData();
+            formData.append('server_num', serverNum);
+            formData.append('server_port', serverPort);
+
+            fetch('/servers/create-docker', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.style.display = 'block';
+                if (data.success) {
+                    outputDiv.innerHTML = '<div class="alert alert-success">' + data.message + '</div>';
+                    // Clear the form
+                    document.getElementById('server-num').value = '';
+                    document.getElementById('server-port').value = '';
+                    // Refresh the page after 2 seconds to show the new server
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    outputDiv.innerHTML = '<div class="alert alert-danger">' + data.message + '</div>';
+                }
+            })
+            .catch(error => {
+                outputDiv.style.display = 'block';
+                outputDiv.innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
+            })
+            .finally(() => {
+                // Re-enable the button
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-plus"></i> Add';
+            });
+        }
+
+        function controlServer(action) {
+            let serverNum;
+            const outputDiv = document.getElementById('server-control-output');
+
+            if (action === 'start') {
+                serverNum = document.getElementById('start-server-num').value;
+            } else if (action === 'stop') {
+                serverNum = document.getElementById('stop-server-num').value;
+            } else if (action === 'restart') {
+                serverNum = document.getElementById('restart-server-num').value;
+            }
+
+            if (!serverNum) {
+                outputDiv.style.display = 'block';
+                outputDiv.innerHTML = '<div class="alert alert-danger">Please enter a server number</div>';
+                return;
+            }
+
+            // Disable the button during processing
+            const button = event.target;
+            button.disabled = true;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+
+            const formData = new FormData();
+            formData.append('server_num', serverNum);
+            formData.append('action', action);
+
+            fetch('/servers/control', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.style.display = 'block';
+                if (data.success) {
+                    outputDiv.innerHTML = '<div class="alert alert-success">' + data.message + '</div>';
+                    // Refresh the page after 2 seconds to show updated status
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    outputDiv.innerHTML = '<div class="alert alert-danger">' + data.message + '</div>';
+                }
+            })
+            .catch(error => {
+                outputDiv.style.display = 'block';
+                outputDiv.innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
+            })
+            .finally(() => {
+                // Re-enable the button
+                button.disabled = false;
+                button.innerHTML = originalText;
+            });
+        }
     </script>
 </body>
 </html>

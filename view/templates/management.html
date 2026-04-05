@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HA Web Server Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <style>
+        :root {
+            --primary: #667eea;
+            --success: #4CAF50;
+            --danger: #f44336;
+            --warning: #ff9800;
+            --info: #2196F3;
+            --dark: #333;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar {
+            background: rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .card {
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(10px);
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, var(--primary), #764ba2);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 20px;
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, var(--danger), #ff6b6b);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 20px;
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, var(--success), #51cf66);
+            border: none;
+            border-radius: 25px;
+            padding: 10px 20px;
+        }
+
+        .status-badge {
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .status-running {
+            background-color: var(--success);
+            color: white;
+        }
+
+        .status-stopped {
+            background-color: var(--danger);
+            color: white;
+        }
+
+        .form-control {
+            border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+
+        .alert {
+            border-radius: 10px;
+            border: none;
+        }
+
+        .metric-card {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: var(--primary);
+        }
+
+        .metric-label {
+            color: var(--dark);
+            font-size: 0.9em;
+        }
+
+        .server-card {
+            transition: transform 0.2s;
+        }
+
+        .server-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .terminal-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            padding: 15px;
+            border-radius: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-server"></i> HA Web Server Management
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="http://localhost:5000" target="_blank">
+                    <i class="fas fa-chart-line"></i> Monitoring Dashboard
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- System Overview -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card metric-card">
+                    <div class="metric-value" id="cpu-percent">{{ system_info.cpu_percent }}%</div>
+                    <div class="metric-label">CPU Usage</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card">
+                    <div class="metric-value" id="memory-percent">{{ system_info.memory_percent }}%</div>
+                    <div class="metric-label">Memory Usage</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card">
+                    <div class="metric-value" id="disk-percent">{{ system_info.disk_percent }}%</div>
+                    <div class="metric-label">Disk Usage</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card metric-card">
+                    <div class="metric-value" id="containers-count">{{ containers|length }}</div>
+                    <div class="metric-label">Active Containers</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Server Control -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-play"></i> Server Control</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="post" action="/servers/start" class="mb-3">
+                            <div class="input-group">
+                                <select name="target" class="form-select">
+                                    <option value="all">All Servers</option>
+                                    <option value="1">Server 1</option>
+                                    <option value="2">Server 2</option>
+                                    <option value="3">Server 3</option>
+                                    <option value="lb">Load Balancer</option>
+                                </select>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="fas fa-play"></i> Start
+                                </button>
+                            </div>
+                        </form>
+
+                        <form method="post" action="/servers/stop" class="mb-3">
+                            <div class="input-group">
+                                <select name="target" class="form-select">
+                                    <option value="all">All Servers</option>
+                                    <option value="1">Server 1</option>
+                                    <option value="2">Server 2</option>
+                                    <option value="3">Server 3</option>
+                                    <option value="lb">Load Balancer</option>
+                                </select>
+                                <button type="submit" class="btn btn-danger">
+                                    <i class="fas fa-stop"></i> Stop
+                                </button>
+                            </div>
+                        </form>
+
+                        <form method="post" action="/servers/restart">
+                            <div class="input-group">
+                                <select name="target" class="form-select">
+                                    <option value="all">All Servers</option>
+                                    <option value="1">Server 1</option>
+                                    <option value="2">Server 2</option>
+                                    <option value="3">Server 3</option>
+                                    <option value="lb">Load Balancer</option>
+                                </select>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-sync"></i> Restart
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-plus"></i> Add New Server</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="post" action="/servers/add">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <input type="number" name="server_num" class="form-control" placeholder="Server #" min="4" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <input type="number" name="port" class="form-control" placeholder="Port" min="8000" max="8999" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="fas fa-plus"></i> Add
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5><i class="fas fa-upload"></i> Upload HTML</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="post" action="/upload" enctype="multipart/form-data">
+                            <div class="input-group mb-2">
+                                <input type="file" name="file" class="form-control" accept=".html" required>
+                                <select name="target" class="form-select">
+                                    <option value="all">All Servers</option>
+                                    <option value="1">Server 1</option>
+                                    <option value="2">Server 2</option>
+                                    <option value="3">Server 3</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="fas fa-upload"></i> Upload
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Load Balancer Configuration -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-balance-scale"></i> Load Balancer Configuration</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <h6>Add Server</h6>
+                                <form method="post" action="/load-balancer/configure" class="mb-3">
+                                    <input type="hidden" name="action" value="add-server">
+                                    <div class="input-group">
+                                        <input type="text" name="ip" class="form-control" placeholder="IP Address" required>
+                                        <input type="number" name="port" class="form-control" placeholder="Port" required>
+                                        <button type="submit" class="btn btn-success">Add</button>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>Remove Server</h6>
+                                <form method="post" action="/load-balancer/configure" class="mb-3">
+                                    <input type="hidden" name="action" value="remove-server">
+                                    <div class="input-group">
+                                        <input type="text" name="ip" class="form-control" placeholder="IP Address" required>
+                                        <input type="number" name="port" class="form-control" placeholder="Port" required>
+                                        <button type="submit" class="btn btn-danger">Remove</button>
+                                    </div>
+                                </form>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>Load Balancing Method</h6>
+                                <form method="post" action="/load-balancer/configure">
+                                    <input type="hidden" name="action" value="set-method">
+                                    <div class="input-group">
+                                        <select name="method" class="form-select">
+                                            <option value="round_robin">Round Robin</option>
+                                            <option value="least_conn">Least Connections</option>
+                                            <option value="ip_hash">IP Hash</option>
+                                        </select>
+                                        <button type="submit" class="btn btn-primary">Set</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                        <hr>
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h6>Auto-Update Load Balancer</h6>
+                                <p class="text-muted small">Automatically discover all running web servers and update the load balancer configuration.</p>
+                                <form method="post" action="/load-balancer/update">
+                                    <button type="submit" class="btn btn-warning">
+                                        <i class="fas fa-sync-alt"></i> Update Load Balancer
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Server Status -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-server"></i> Server Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row" id="server-status">
+                            {% for container in containers %}
+                            <div class="col-md-3 mb-3">
+                                <div class="card server-card">
+                                    <div class="card-body text-center">
+                                        <h6>{{ container.name }}</h6>
+                                        <span class="status-badge status-{{ 'running' if container.running else 'stopped' }}">
+                                            {{ container.status }}
+                                        </span>
+                                        <br><small class="text-muted">{{ container.image }}</small>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Host Monitoring -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-network-wired"></i> Host Monitoring</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="monitor-form">
+                            <div class="input-group mb-3">
+                                <input type="text" id="host-ip" class="form-control" placeholder="Host IP" value="127.0.0.1">
+                                <select id="monitor-action" class="form-select">
+                                    <option value="all">All Checks</option>
+                                    <option value="ping">Ping</option>
+                                    <option value="services">Services</option>
+                                    <option value="system">System Info</option>
+                                </select>
+                                <button type="button" class="btn btn-info" onclick="runMonitoring()">
+                                    <i class="fas fa-search"></i> Check
+                                </button>
+                            </div>
+                        </form>
+                        <div id="monitor-output" class="terminal-output" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-terminal"></i> SSH Login</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="ssh-form">
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <input type="text" id="ssh-host" class="form-control" placeholder="Host IP" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="text" id="ssh-user" class="form-control" placeholder="Username" value="root">
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="number" id="ssh-port" class="form-control" placeholder="Port" value="22">
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-warning w-100" onclick="prepareSSH()">
+                                <i class="fas fa-key"></i> Prepare SSH Connection
+                            </button>
+                        </form>
+                        <div id="ssh-output" class="mt-3" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Auto-refresh system metrics
+        setInterval(function() {
+            fetch('/api/system-info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('cpu-percent').textContent = data.cpu_percent + '%';
+                    document.getElementById('memory-percent').textContent = data.memory_percent + '%';
+                    document.getElementById('disk-percent').textContent = data.disk_percent + '%';
+                });
+        }, 5000);
+
+        // Auto-refresh container status
+        setInterval(function() {
+            fetch('/api/containers')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('containers-count').textContent = data.containers.length;
+                    // Update server status cards
+                    updateServerStatus(data.containers);
+                });
+        }, 3000);
+
+        function updateServerStatus(containers) {
+            const statusContainer = document.getElementById('server-status');
+            statusContainer.innerHTML = '';
+
+            containers.forEach(container => {
+                const col = document.createElement('div');
+                col.className = 'col-md-3 mb-3';
+
+                const card = document.createElement('div');
+                card.className = 'card server-card';
+
+                const body = document.createElement('div');
+                body.className = 'card-body text-center';
+
+                const title = document.createElement('h6');
+                title.textContent = container.name;
+
+                const badge = document.createElement('span');
+                badge.className = `status-badge status-${container.running ? 'running' : 'stopped'}`;
+                badge.textContent = container.status;
+
+                const image = document.createElement('br');
+                const small = document.createElement('small');
+                small.className = 'text-muted';
+                small.textContent = container.image;
+
+                body.appendChild(title);
+                body.appendChild(badge);
+                body.appendChild(image);
+                body.appendChild(small);
+
+                card.appendChild(body);
+                col.appendChild(card);
+                statusContainer.appendChild(col);
+            });
+        }
+
+        function runMonitoring() {
+            const hostIp = document.getElementById('host-ip').value;
+            const action = document.getElementById('monitor-action').value;
+            const outputDiv = document.getElementById('monitor-output');
+
+            const formData = new FormData();
+            formData.append('host_ip', hostIp);
+            formData.append('action', action);
+
+            fetch('/monitoring/hosts', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.style.display = 'block';
+                outputDiv.textContent = data.output;
+            })
+            .catch(error => {
+                outputDiv.style.display = 'block';
+                outputDiv.textContent = 'Error: ' + error.message;
+            });
+        }
+
+        function prepareSSH() {
+            const host = document.getElementById('ssh-host').value;
+            const user = document.getElementById('ssh-user').value;
+            const port = document.getElementById('ssh-port').value;
+            const outputDiv = document.getElementById('ssh-output');
+
+            const formData = new FormData();
+            formData.append('host_ip', host);
+            formData.append('username', user);
+            formData.append('port', port);
+
+            fetch('/ssh/login', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.style.display = 'block';
+                if (data.success) {
+                    outputDiv.innerHTML = `
+                        <div class="alert alert-info">
+                            <strong>SSH Command:</strong><br>
+                            <code>${data.command}</code><br>
+                            <small class="text-muted">Run this command in your terminal for SSH access</small>
+                        </div>
+                    `;
+                } else {
+                    outputDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                }
+            })
+            .catch(error => {
+                outputDiv.style.display = 'block';
+                outputDiv.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            });
+        }
+    </script>
+</body>
+</html>
