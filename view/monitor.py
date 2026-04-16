@@ -3,8 +3,9 @@ import json
 import socket
 import psutil
 import docker
+import shlex
 import subprocess
-from flask import Flask, render_template, jsonify, request, flash, redirect, url_for
+from flask import Flask, render_template, jsonify, request, flash, redirect, url_for, get_flashed_messages
 from datetime import datetime
 import requests
 import threading
@@ -80,7 +81,7 @@ def get_container_info():
     if use_subprocess:
         # Use subprocess to get container info
         try:
-            result = subprocess.run(['docker', 'ps', '-a', '--format', 'json'],
+            result = subprocess.run(['docker', 'ps', '-a', '--format', '{{json .}}'],
                                   capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 containers_info = []
@@ -95,7 +96,7 @@ def get_container_info():
                                     'name': container.get('Names', '').replace('/', ''),
                                     'id': container.get('ID', '')[:12],
                                     'status': container.get('Status', ''),
-                                    'state': 'running' if 'Up' in container.get('Status', '') else 'exited',
+                                    'state': 'running' in container.get('Status', ''),
                                     'image': container.get('Image', ''),
                                     'created': '',  # Not available in this format
                                     'ports': '',    # Not available in this format
@@ -138,20 +139,20 @@ def get_container_info():
                         'cpu_percent': 'N/A',
                         'memory_mb': 'N/A'
                     }
-                
-                if stats:
-                    cpu_delta = stats['cpu_stats'].get('cpu_usage', {}).get('total_usage', 0) - \
-                               stats['precpu_stats'].get('cpu_usage', {}).get('total_usage', 0)
-                    system_delta = stats['cpu_stats'].get('system_cpu_usage', 0) - \
-                                  stats['precpu_stats'].get('system_cpu_usage', 0)
-                    cpu_percent = (cpu_delta / system_delta * 100.0) if system_delta > 0 else 0
-                    
-                    memory = stats['memory_stats'].get('usage', 0) / (1024 * 1024)
-                    
-                    container_data['cpu_percent'] = f"{cpu_percent:.2f}%"
-                    container_data['memory_mb'] = f"{memory:.2f}"
-                
-                containers_info.append(container_data)
+
+                    if stats:
+                        cpu_delta = stats['cpu_stats'].get('cpu_usage', {}).get('total_usage', 0) - \
+                                   stats['precpu_stats'].get('cpu_usage', {}).get('total_usage', 0)
+                        system_delta = stats['cpu_stats'].get('system_cpu_usage', 0) - \
+                                      stats['precpu_stats'].get('system_cpu_usage', 0)
+                        cpu_percent = (cpu_delta / system_delta * 100.0) if system_delta > 0 else 0
+                        
+                        memory = stats['memory_stats'].get('usage', 0) / (1024 * 1024)
+                        
+                        container_data['cpu_percent'] = f"{cpu_percent:.2f}%"
+                        container_data['memory_mb'] = f"{memory:.2f}"
+
+                    containers_info.append(container_data)
         except Exception as e:
             print(f"Error getting container info: {e}")
         
@@ -161,33 +162,40 @@ def check_server_health():
     """Check health of backend servers"""
     servers = []
 
-    # Get all running web_server containers
+    # Get all web_server containers (running and stopped)
     if docker_available:
         if use_subprocess:
             try:
-                result = subprocess.run(['docker', 'ps', '--filter', 'name=web_server_', '--format', '{{.Names}}'],
+                result = subprocess.run(['docker', 'ps', '-a', '--filter', 'name=web_server_', '--format', '{{json .}}'],
                                       capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
-                    container_names = result.stdout.strip().split('\n')
-                    for container_name in container_names:
-                        if container_name.strip():
-                            # Extract port from container name (web_server_1 -> 8001)
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if line.strip():
                             try:
-                                server_num = int(container_name.split('_')[-1])
-                                port = 8000 + server_num
-                                servers.append({
-                                    'name': container_name,
-                                    'port': port,
-                                    'url': f'http://127.0.0.1:{port}'
-                                })
-                            except (ValueError, IndexError):
+                                container_data = json.loads(line)
+                                container_name = container_data.get('Names', '').replace('/', '')
+                                container_status = container_data.get('Status', '')
+                                if container_name:
+                                    try:
+                                        server_num = int(container_name.split('_')[-1])
+                                        port = 8000 + server_num
+                                        servers.append({
+                                            'name': container_name,
+                                            'port': port,
+                                            'url': f'http://127.0.0.1:{port}',
+                                            'status_text': container_status
+                                        })
+                                    except (ValueError, IndexError):
+                                        continue
+                            except json.JSONDecodeError:
                                 continue
             except Exception as e:
                 print(f"Error getting containers via subprocess: {e}")
         else:
             # Use Docker Python library
             try:
-                containers = client.containers.list(filters={'name': 'web_server_'})
+                containers = client.containers.list(all=True, filters={'name': 'web_server_'})
                 for container in containers:
                     container_name = container.name
                     try:
@@ -196,7 +204,8 @@ def check_server_health():
                         servers.append({
                             'name': container_name,
                             'port': port,
-                            'url': f'http://127.0.0.1:{port}'
+                            'url': f'http://127.0.0.1:{port}',
+                            'status_text': container.status
                         })
                     except (ValueError, IndexError):
                         continue
@@ -206,48 +215,64 @@ def check_server_health():
     # Fallback to hardcoded servers if no containers found
     if not servers:
         servers = [
-            {'name': 'web_server_1', 'port': 8001, 'url': 'http://127.0.0.1:8001'},
-            {'name': 'web_server_2', 'port': 8002, 'url': 'http://127.0.0.1:8002'},
-            {'name': 'web_server_3', 'port': 8003, 'url': 'http://127.0.0.1:8003'},
+            {'name': 'web_server_1', 'port': 8001, 'url': 'http://127.0.0.1:8001', 'status_text': 'unknown'},
+            {'name': 'web_server_2', 'port': 8002, 'url': 'http://127.0.0.1:8002', 'status_text': 'unknown'},
+            {'name': 'web_server_3', 'port': 8003, 'url': 'http://127.0.0.1:8003', 'status_text': 'unknown'},
         ]
 
     servers_status = []
     for server in servers:
-        try:
-            start = time.time()
-            response = requests.get(server['url'], timeout=2)
-            response_time = (time.time() - start) * 1000
-
+        status_text = server.get('status_text', '')
+        if status_text and 'up' not in status_text.lower():
             status = {
                 'name': server['name'],
                 'port': server['port'],
                 'url': server['url'],
-                'status': 'UP' if response.status_code == 200 else 'ERROR',
-                'response_time_ms': f"{response_time:.2f}",
-                'status_code': response.status_code,
-                'healthy': response.status_code == 200
-            }
-        except requests.exceptions.Timeout:
-            status = {
-                'name': server['name'],
-                'port': server['port'],
-                'url': server['url'],
-                'status': 'TIMEOUT',
-                'response_time_ms': '>2000',
-                'status_code': 0,
-                'healthy': False
-            }
-        except Exception as e:
-            status = {
-                'name': server['name'],
-                'port': server['port'],
-                'url': server['url'],
-                'status': 'DOWN',
+                'status': 'STOPPED' if 'exited' in status_text.lower() or 'created' in status_text.lower() else 'DOWN',
                 'response_time_ms': 'N/A',
                 'status_code': 0,
                 'healthy': False,
-                'error': str(e)
+                'status_text': status_text
             }
+        else:
+            try:
+                start = time.time()
+                response = requests.get(server['url'], timeout=2)
+                response_time = (time.time() - start) * 1000
+
+                status = {
+                    'name': server['name'],
+                    'port': server['port'],
+                    'url': server['url'],
+                    'status': 'UP' if response.status_code == 200 else 'ERROR',
+                    'response_time_ms': f"{response_time:.2f}",
+                    'status_code': response.status_code,
+                    'healthy': response.status_code == 200,
+                    'status_text': status_text
+                }
+            except requests.exceptions.Timeout:
+                status = {
+                    'name': server['name'],
+                    'port': server['port'],
+                    'url': server['url'],
+                    'status': 'TIMEOUT',
+                    'response_time_ms': '>2000',
+                    'status_code': 0,
+                    'healthy': False,
+                    'status_text': status_text
+                }
+            except Exception as e:
+                status = {
+                    'name': server['name'],
+                    'port': server['port'],
+                    'url': server['url'],
+                    'status': 'DOWN',
+                    'response_time_ms': 'N/A',
+                    'status_code': 0,
+                    'healthy': False,
+                    'error': str(e),
+                    'status_text': status_text
+                }
 
         servers_status.append(status)
 
@@ -323,6 +348,79 @@ def run_script(script_name, *args):
     except Exception as e:
         return False, f"Error running script: {str(e)}"
 
+
+def docker_stop_container(container_name):
+    if not docker_available:
+        return False, "Docker not available"
+
+    try:
+        if use_subprocess:
+            result = subprocess.run(['docker', 'stop', container_name], capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                return True, result.stdout.strip()
+            stderr = (result.stderr or result.stdout).strip()
+            if 'is not running' in stderr.lower() or 'already stopped' in stderr.lower():
+                return True, stderr
+            return False, stderr
+        else:
+            container = client.containers.get(container_name)
+            container.stop()
+            return True, f"Stopped {container_name}"
+    except Exception as e:
+        message = str(e)
+        if 'is not running' in message.lower() or 'not running' in message.lower():
+            return True, message
+        return False, message
+
+
+def stop_containers(target):
+    target = str(target)
+    names = []
+
+    if target == 'all':
+        names.append('load_balancer')
+        if docker_available:
+            try:
+                if use_subprocess:
+                    result = subprocess.run(['docker', 'ps', '-a', '--filter', 'name=web_server_', '--format', '{{.Names}}'],
+                                            capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        names.extend([name.strip() for name in result.stdout.split('\n') if name.strip()])
+                else:
+                    containers = client.containers.list(all=True, filters={'name': 'web_server_'})
+                    names.extend([container.name for container in containers])
+            except Exception as e:
+                return False, str(e)
+    elif target == 'lb':
+        names = ['load_balancer']
+    elif target.isdigit():
+        names = [f'web_server_{target}']
+    else:
+        return False, 'Invalid target'
+
+    if not names:
+        return False, 'No matching containers found'
+
+    messages = []
+    for name in names:
+        success, output = docker_stop_container(name)
+        messages.append(f"{name}: {output}")
+        if not success:
+            return False, '; '.join(messages)
+
+    return True, '; '.join(messages)
+
+
+def list_control_scripts():
+    """Return a list of available control scripts."""
+    try:
+        scripts = [f for f in os.listdir(CONTROL_SCRIPTS_DIR)
+                   if os.path.isfile(os.path.join(CONTROL_SCRIPTS_DIR, f)) and f.endswith('.sh')]
+        return sorted(scripts)
+    except Exception as e:
+        print(f"Error listing control scripts: {e}")
+        return []
+
 def update_monitoring_data():
     """Update all monitoring data periodically"""
     while True:
@@ -341,7 +439,68 @@ def update_monitoring_data():
 @app.route('/')
 def dashboard():
     """Main dashboard page"""
-    return render_template('dashboard.html')
+    with data_lock:
+        return render_template('dashboard.html', last_update=monitoring_data.get('last_update'))
+
+@app.route('/view/dashboard')
+def dashboard_view():
+    with data_lock:
+        return render_template('dashboard.html', last_update=monitoring_data.get('last_update'))
+
+@app.route('/view/management')
+def management():
+    with data_lock:
+        containers = monitoring_data.get('containers', [])
+        server_targets = [
+            {'label': 'Barcha serverlar', 'value': 'all'},
+            {'label': 'Load Balancer', 'value': 'lb'}
+        ]
+        web_containers = []
+        for container in containers:
+            name = container.get('name', '')
+            if name.startswith('web_server_'):
+                try:
+                    server_num = int(name.rsplit('_', 1)[-1])
+                    web_containers.append((server_num, name))
+                except ValueError:
+                    continue
+        for server_num, name in sorted(web_containers):
+            server_targets.append({'label': name, 'value': str(server_num)})
+
+        servers_status = monitoring_data.get('servers_status', [])
+        status_map = {s.get('name'): s for s in servers_status}
+
+        return render_template(
+            'management.html',
+            system_info=monitoring_data.get('host_info', {}),
+            containers=containers,
+            scripts=list_control_scripts(),
+            server_targets=server_targets,
+            servers_status=servers_status,
+            status_map=status_map,
+            last_update=monitoring_data.get('last_update'),
+            flash_messages=get_flashed_messages(with_categories=True)
+        )
+
+@app.route('/scripts/run', methods=['POST'])
+def run_control_script():
+    script_name = request.form.get('script_name')
+    args = request.form.get('args', '').strip()
+    scripts = list_control_scripts()
+
+    if script_name not in scripts:
+        flash(f"Not permitted or unknown script: {script_name}", 'error')
+        return redirect(url_for('management'))
+
+    arg_list = shlex.split(args) if args else []
+    success, output = run_script(script_name, *arg_list)
+
+    if success:
+        flash(f"Script {script_name} executed successfully: {output}", 'success')
+    else:
+        flash(f"Script {script_name} failed: {output}", 'error')
+
+    return redirect(url_for('management'))
 
 @app.route('/api/status')
 def api_status():
@@ -454,9 +613,9 @@ def start_servers():
 
 @app.route('/servers/stop', methods=['POST'])
 def stop_servers():
-    """Stop servers"""
+    """Stop servers without removing container state."""
     target = request.form.get('target', 'all')
-    success, output = run_script('stop_servers.sh', target)
+    success, output = stop_containers(target)
 
     if success:
         flash(f'Servers stopped successfully: {target}', 'success')
@@ -496,48 +655,60 @@ def add_server():
 
     return redirect(url_for('dashboard'))
 
+@app.route('/servers/remove', methods=['POST'])
+def remove_server():
+    """Remove server from load balancer and delete the stopped container."""
+    try:
+        server_num = int(request.form.get('server_num'))
+        port = request.form.get('port')
+        if not port:
+            port = str(8000 + server_num)
+
+        success, output = run_script('configure_load_balancer.sh', 'remove-server', '127.0.0.1', str(port))
+        remove_success, remove_output = run_script('stop_servers.sh', str(server_num))
+
+        if success and remove_success:
+            flash(f'Server {server_num} removed successfully', 'success')
+        elif success:
+            flash(f'Server removed from load balancer, but stopping container failed: {remove_output}', 'warning')
+        elif remove_success:
+            flash(f'Server container removed, but load balancer update failed: {output}', 'warning')
+        else:
+            flash(f'Failed to remove server: {output} / {remove_output}', 'error')
+    except ValueError:
+        flash('Invalid server number or port', 'error')
+    except Exception as e:
+        flash(f'Error removing server: {str(e)}', 'error')
+
+    return redirect(url_for('dashboard'))
+
 @app.route('/servers/control', methods=['POST'])
 def control_server():
     """Control server (start/stop/restart) using shell scripts"""
-    try:
-        server_num = int(request.form.get('server_num'))
-        action = request.form.get('action')
+    target = request.form.get('target') or request.form.get('server_num')
+    action = request.form.get('action')
 
-        if action not in ['start', 'stop', 'restart']:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid action. Must be start, stop, or restart.'
-            })
+    if not target:
+        flash('Server target is required', 'error')
+        return redirect(url_for('dashboard'))
 
-        if action == 'start':
-            script_name = 'start_servers.sh'
-        elif action == 'stop':
-            script_name = 'stop_servers.sh'
-        else:  # restart
-            script_name = 'restart_servers.sh'
+    if action not in ['start', 'stop', 'restart']:
+        flash('Invalid action. Must be start, stop, or restart.', 'error')
+        return redirect(url_for('dashboard'))
 
-        success, output = run_script(script_name, str(server_num))
+    if action == 'start':
+        success, output = run_script('start_servers.sh', str(target))
+    elif action == 'stop':
+        success, output = stop_containers(target)
+    else:
+        success, output = run_script('restart_servers.sh', str(target))
 
-        if success:
-            return jsonify({
-                'success': True,
-                'message': f'Server {server_num} {action}ed successfully'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': f'Failed to {action} server: {output}'
-            })
-    except ValueError:
-        return jsonify({
-            'success': False,
-            'message': 'Invalid server number'
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        })
+    if success:
+        flash(f'Server target {target} {action}ed successfully', 'success')
+    else:
+        flash(f'Failed to {action} server target {target}: {output}', 'error')
+
+    return redirect(url_for('dashboard'))
 
 @app.route('/servers/create-docker', methods=['POST'])
 def create_docker_server():
