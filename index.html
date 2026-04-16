@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="uz">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>High-Availability Web Server</title>
+    <title>Sodda va Chiroyli Web Server</title>
     <style>
         * {
             margin: 0;
@@ -12,108 +12,169 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: radial-gradient(circle at top left, #8dd3f4 0%, #4c6ef5 55%, #2a3eb1 100%);
             min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px;
+            padding: 24px;
+            color: #1f2937;
         }
 
-        .container {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            padding: 40px;
-            max-width: 600px;
+        .card {
+            width: 100%;
+            max-width: 760px;
+            background: rgba(255, 255, 255, 0.97);
+            border-radius: 24px;
+            box-shadow: 0 28px 80px rgba(15, 23, 42, 0.18);
+            overflow: hidden;
+        }
+
+        .hero {
+            padding: 36px 30px;
+            background: linear-gradient(180deg, rgba(79, 70, 229, 0.12), transparent 100%);
             text-align: center;
         }
 
-        h1 {
-            color: #333;
-            margin-bottom: 20px;
-            font-size: 2.5em;
+        .hero h1 {
+            font-size: clamp(2rem, 4vw, 3rem);
+            margin-bottom: 12px;
         }
 
-        .status {
-            display: inline-block;
-            background: #4CAF50;
+        .hero p {
+            font-size: 1rem;
+            line-height: 1.8;
+            color: #4b5563;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin: 22px auto 0;
+            padding: 12px 20px;
+            border-radius: 999px;
+            background: #22c55e;
             color: white;
-            padding: 10px 20px;
-            border-radius: 25px;
-            font-weight: bold;
-            margin-bottom: 20px;
-            font-size: 1.1em;
+            font-weight: 600;
+            box-shadow: 0 14px 30px rgba(34, 197, 94, 0.22);
         }
 
-        p {
-            color: #666;
-            font-size: 1.1em;
-            line-height: 1.6;
-            margin-bottom: 15px;
+        .content {
+            padding: 30px;
         }
 
-        .info-box {
-            background: #f5f5f5;
-            border-left: 4px solid #667eea;
-            padding: 20px;
-            margin-top: 30px;
-            text-align: left;
-            border-radius: 4px;
+        .section {
+            margin-bottom: 24px;
         }
 
-        .info-box h3 {
-            color: #667eea;
-            margin-bottom: 10px;
+        .section h2 {
+            font-size: 1.2rem;
+            margin-bottom: 14px;
+            color: #1e3a8a;
         }
 
-        .info-box ul {
-            list-style-position: inside;
-            color: #666;
+        .section p,
+        .section li {
+            font-size: 1rem;
+            line-height: 1.8;
+            color: #334155;
         }
 
-        .info-box li {
+        .cards {
+            display: grid;
+            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+
+        .card-item {
+            background: #f8fafc;
+            border-radius: 18px;
+            padding: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+        }
+
+        .card-item strong {
+            display: block;
             margin-bottom: 8px;
+            color: #1d4ed8;
         }
 
-        .timestamp {
-            margin-top: 30px;
-            color: #999;
-            font-size: 0.9em;
-            font-style: italic;
+        .footer {
+            margin-top: 10px;
+            padding: 22px 30px;
+            background: #eef2ff;
+            color: #475569;
+            font-size: 0.95rem;
+            border-top: 1px solid rgba(99, 102, 241, 0.18);
+        }
+
+        .footer span {
+            display: block;
+            margin-top: 6px;
+            color: #64748b;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 High-Availability Web Server</h1>
-        
-        <div class="status">✓ The site is working normally</div>
-
-        <p>
-            This message is being served from one of our backend web servers 
-            through a load balancer with automatic failover capabilities.
-        </p>
-
-        <div class="info-box">
-            <h3>📋 Architecture Details</h3>
-            <ul>
-                <li><strong>Load Balancer:</strong> 1 Nginx reverse proxy on port 80</li>
-                <li><strong>Backend Servers:</strong> 3 identical Nginx web servers</li>
-                <li><strong>Health Checks:</strong> Automatic failover if servers fail</li>
-                <li><strong>Network:</strong> Local Docker bridge network (offline-capable)</li>
-                <li><strong>Redundancy:</strong> Handles 2 simultaneous server failures</li>
-            </ul>
+    <div class="card">
+        <div class="hero">
+            <h1>Veb-server ishlamoqda</h1>
+            <p>Bu sahifa sizga oddiy va tushunarli tarzda taqdim etilgan. Hech qanday texnik ma'lumotga ega bo'lmasangiz ham, bu yerda sayt holati va asosiy ma'lumotlar aniq ko'rsatiladi.</p>
+            <div class="badge">✅ Sayt normal ishlayapti</div>
         </div>
 
-        <div class="timestamp">
-            Page loaded at: <span id="timestamp"></span>
+        <div class="content">
+            <div class="section">
+                <h2>Bu nima?</h2>
+                <p>Bu sahifa tarmoq ortida joylashgan serverlardan birida ishlaydi. Agar bir server ishlamasa ham, tizim avtomatik ravishda boshqa serverga yo'naltiradi.</p>
+            </div>
+
+            <div class="section">
+                <h2>Oddiy tushuntirish</h2>
+                <div class="cards">
+                    <div class="card-item">
+                        <strong>Yuk taqsimlash</strong>
+                        Saytga kelgan so'rovlar avtomatik tarzda bir nechta serverlar o'rtasida taqsimlanadi.
+                    </div>
+                    <div class="card-item">
+                        <strong>Qayta tiklanish</strong>
+                        Agar bir server ishdan chiqsa, boshqa serverlar xizmatni davom ettiradi.
+                    </div>
+                    <div class="card-item">
+                        <strong>Yangi foydalanuvchiga mos</strong>
+                        Dizayni sodda, matnlari oddiy va bir qarashda tushunarli qiladi.
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Tezkor ma'lumot</h2>
+                <ul>
+                    <li>Bu sahifa ishlash holatini tekshiradi.</li>
+                    <li>Sayt bir nechta server orqali xizmat ko'rsatmoqda.</li>
+                    <li>Tizim xavfsiz va barqaror ishlashga mo'ljallangan.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer">
+            Sahifa yuklangan vaqti: <span id="timestamp"></span>
         </div>
     </div>
 
     <script>
-        document.getElementById('timestamp').textContent = new Date().toLocaleString();
+        document.getElementById('timestamp').textContent = new Date().toLocaleString('uz-UZ', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
     </script>
 </body>
 </html>
