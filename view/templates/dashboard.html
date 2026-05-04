@@ -1,329 +1,329 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="uz">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AutoPilot Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <title>Aero — Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: 'Inter', system-ui, sans-serif;
-      background: linear-gradient(180deg, #0f172a 0%, #2563eb 55%, #8b5cf6 100%);
-      color: #0f172a;
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',system-ui,sans-serif;background:#0a0e1a;color:#e2e8f0;min-height:100vh}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;background:rgba(15,23,42,0.85);backdrop-filter:blur(16px);border-bottom:1px solid rgba(99,102,241,0.15);position:sticky;top:0;z-index:100}
+    .topbar .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.15rem;color:#fff}
+    .topbar .logo i{color:#818cf8;font-size:1.3rem}
+    .topbar nav{display:flex;gap:6px}
+    .topbar nav a{padding:8px 18px;border-radius:10px;color:#94a3b8;text-decoration:none;font-weight:600;font-size:.88rem;transition:.2s}
+    .topbar nav a:hover,.topbar nav a.active{background:rgba(99,102,241,0.15);color:#a5b4fc}
+    .page{max-width:1200px;margin:0 auto;padding:24px 20px 48px}
+    .hero{text-align:center;padding:36px 24px 28px;margin-bottom:28px}
+    .hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,#818cf8,#c084fc,#f472b6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+    .hero p{color:#64748b;font-size:.95rem;max-width:600px;margin:0 auto 20px}
+    .update-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:99px;background:rgba(99,102,241,0.12);color:#a5b4fc;font-size:.82rem;font-weight:600}
+    .update-badge .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .grid4{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:24px}
+    .metric{background:linear-gradient(135deg,rgba(30,41,59,0.9),rgba(15,23,42,0.95));border:1px solid rgba(99,102,241,0.1);border-radius:18px;padding:22px;position:relative;overflow:hidden}
+    .metric::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:18px 18px 0 0}
+    .metric.blue::before{background:linear-gradient(90deg,#3b82f6,#60a5fa)}
+    .metric.purple::before{background:linear-gradient(90deg,#8b5cf6,#a78bfa)}
+    .metric.green::before{background:linear-gradient(90deg,#22c55e,#4ade80)}
+    .metric.orange::before{background:linear-gradient(90deg,#f97316,#fb923c)}
+    .metric-label{font-size:.78rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+    .metric-val{font-size:1.8rem;font-weight:800;color:#f1f5f9;margin-bottom:12px}
+    .metric-bar{height:6px;background:rgba(148,163,184,0.15);border-radius:99px;overflow:hidden}
+    .metric-bar .fill{height:100%;border-radius:99px;transition:width .6s ease}
+    .metric-bar .fill.blue{background:linear-gradient(90deg,#3b82f6,#60a5fa)}
+    .metric-bar .fill.purple{background:linear-gradient(90deg,#8b5cf6,#a78bfa)}
+    .metric-bar .fill.green{background:linear-gradient(90deg,#22c55e,#4ade80)}
+    .metric-bar .fill.orange{background:linear-gradient(90deg,#f97316,#fb923c)}
+    .panel{background:linear-gradient(135deg,rgba(30,41,59,0.9),rgba(15,23,42,0.95));border:1px solid rgba(99,102,241,0.1);border-radius:18px;overflow:hidden;margin-bottom:24px}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid rgba(99,102,241,0.08)}
+    .panel-head h2{font-size:1rem;font-weight:700;color:#e2e8f0}
+    .panel-head .sub{font-size:.8rem;color:#64748b}
+    .panel-body{padding:20px 22px}
+    .srv-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+    .srv{background:rgba(15,23,42,0.6);border:1px solid rgba(99,102,241,0.08);border-radius:14px;padding:16px;transition:.25s;cursor:pointer}
+    .srv:hover{border-color:rgba(99,102,241,0.4);transform:translateY(-2px);box-shadow:0 10px 20px rgba(0,0,0,0.2)}
+    .srv h3{font-size:.92rem;font-weight:700;color:#e2e8f0;margin-bottom:10px}
+    .srv .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:99px;font-size:.75rem;font-weight:700}
+    .pill-up{background:rgba(34,197,94,0.15);color:#4ade80}
+    .pill-down{background:rgba(239,68,68,0.15);color:#f87171}
+    .pill-warn{background:rgba(245,158,11,0.15);color:#fbbf24}
+    .srv .meta{margin-top:10px;font-size:.78rem;color:#64748b;line-height:1.6}
+    .info-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .info-box{background:rgba(15,23,42,0.6);border:1px solid rgba(99,102,241,0.08);border-radius:14px;padding:16px}
+    .info-box label{font-size:.75rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.04em}
+    .info-box .val{font-size:1rem;font-weight:600;color:#e2e8f0;margin-top:6px;word-break:break-all}
+    .lan-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+    .lan-card{background:rgba(15,23,42,0.6);border:1px solid rgba(99,102,241,0.08);border-radius:14px;padding:18px;position:relative;overflow:hidden;cursor:pointer;transition:.25s}
+    .lan-card:hover{border-color:rgba(99,102,241,0.4);transform:translateY(-2px);box-shadow:0 10px 20px rgba(0,0,0,0.2)}
+    .lan-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+    .lan-card.admin::before{background:#ef4444}
+    .lan-card.user::before{background:#3b82f6}
+    .lan-card.reader::before{background:#22c55e}
+    .lan-card h3{font-size:.92rem;font-weight:700;margin-bottom:6px}
+    .lan-card .role-badge{display:inline-flex;padding:4px 10px;border-radius:99px;font-size:.72rem;font-weight:700;text-transform:uppercase}
+    .lan-card .role-badge.admin{background:rgba(239,68,68,0.15);color:#f87171}
+    .lan-card .role-badge.user{background:rgba(59,130,246,0.15);color:#60a5fa}
+    .lan-card .role-badge.reader{background:rgba(34,197,94,0.15);color:#4ade80}
+    .lan-card .port{font-size:.82rem;color:#94a3b8;margin-top:8px}
+    .lan-card .desc{font-size:.78rem;color:#64748b;margin-top:6px}
+    .footer{text-align:center;color:#475569;font-size:.82rem;margin-top:12px}
+
+    /* Modal Styles */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 14, 26, 0.85); backdrop-filter: blur(8px);
+      z-index: 1000; display: none; align-items: center; justify-content: center;
+      padding: 20px;
     }
-    .page {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 28px 20px 40px;
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: linear-gradient(135deg, rgba(30,41,59,0.98), rgba(15,23,42,0.98));
+      border: 1px solid rgba(99,102,241,0.3);
+      border-radius: 20px; width: 100%; max-width: 800px;
+      padding: 30px; position: relative; box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      animation: modalFadeIn 0.3s ease;
     }
-    .hero {
-      background: rgba(15, 23, 42, 0.92);
-      color: #f8fafc;
-      border-radius: 24px;
-      padding: 30px 28px;
-      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.32);
-      margin-bottom: 26px;
-      text-align: center;
+    @keyframes modalFadeIn { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    .modal-close {
+      position: absolute; top: 20px; right: 20px; background: rgba(99,102,241,0.1); border: none;
+      color: #a5b4fc; width: 36px; height: 36px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; transition: 0.2s;
     }
-    .hero h1 {
-      margin-bottom: 12px;
-      font-size: clamp(2rem, 4vw, 3rem);
-    }
-    .hero p {
-      color: #cbd5e1;
-      line-height: 1.8;
-      margin-bottom: 22px;
-      max-width: 760px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    .badge-status {
-      display: inline-flex;
-      gap: 10px;
-      align-items: center;
-      padding: 12px 20px;
-      border-radius: 999px;
-      background: #22c55e;
-      color: white;
-      font-weight: 700;
-      font-size: 0.95rem;
-    }
-    .panel {
-      border-radius: 24px;
-      overflow: hidden;
-      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.16);
-      margin-bottom: 24px;
-    }
-    .panel-header {
-      padding: 18px 24px;
-      background: #0f172a;
-      color: white;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .panel-header span {
-      opacity: 0.75;
-      font-size: 0.95rem;
-    }
-    .panel-body {
-      background: white;
-      padding: 24px;
-    }
-    .metrics {
-      display: grid;
-      gap: 18px;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    }
-    .metric-card {
-      background: #f8fafc;
-      border-radius: 18px;
-      padding: 20px 22px;
-      border: 1px solid rgba(148, 163, 184, 0.24);
-      min-height: 140px;
-    }
-    .metric-card strong {
-      display: block;
-      color: #334155;
-      margin-bottom: 10px;
-      font-size: 0.95rem;
-    }
-    .metric-value {
-      font-size: 2rem;
-      font-weight: 700;
-      color: #0f172a;
-      margin-bottom: 18px;
-    }
-    .metric-bar {
-      height: 10px;
-      background: #e2e8f0;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .metric-fill {
-      height: 100%;
-      border-radius: 999px;
-    }
-    .metric-label {
-      display: inline-flex;
-      justify-content: space-between;
-      width: 100%;
-      font-size: 0.92rem;
-      color: #475569;
-      margin-top: 10px;
-    }
-    .server-grid {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    }
-    .server-card {
-      background: #111827;
-      color: white;
-      border-radius: 18px;
-      padding: 18px;
-      min-height: 130px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      border: 1px solid rgba(255,255,255,0.08);
-    }
-    .server-card h3 {
-      margin: 0 0 10px;
-      font-size: 1.05rem;
-      letter-spacing: -0.03em;
-    }
-    .server-card .status-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      font-weight: 700;
-      font-size: 0.9rem;
-    }
-    .status-up { background: #22c55e; color: white; }
-    .status-down { background: #ef4444; color: white; }
-    .status-error { background: #f59e0b; color: white; }
-    .info-row {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    }
-    .info-box {
-      background: #f8fafc;
-      border-radius: 18px;
-      padding: 18px;
-      border: 1px solid rgba(148, 163, 184, 0.24);
-    }
-    .info-box strong {
-      display: block;
-      margin-bottom: 10px;
-      color: #334155;
-    }
-    .info-box div {
-      color: #475569;
-      line-height: 1.7;
-    }
-    .footer {
-      text-align: right;
-      color: #cbd5e1;
-      margin-top: 18px;
-      font-size: 0.95rem;
-    }
+    .modal-close:hover { background: rgba(99,102,241,0.3); color: #fff; }
+    .modal-title { font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 24px; display:flex; align-items:center; gap:10px; }
+    .modal-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
+    .modal-stat-box { background: rgba(15,23,42,0.6); border: 1px solid rgba(99,102,241,0.1); border-radius: 14px; padding: 18px; text-align: center; }
+    .modal-stat-val { font-size: 2rem; font-weight: 800; color: #a5b4fc; margin-bottom: 4px; }
+    .modal-stat-lbl { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+    .chart-container { height: 320px; width: 100%; position: relative; }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <div class="logo"><i class="fas fa-server"></i> Aero</div>
+    <nav>
+      <a href="/" class="active"><i class="fas fa-chart-line"></i> Dashboard</a>
+      <a href="/view/management"><i class="fas fa-cogs"></i> Boshqaruv</a>
+      <a href="/view/lan"><i class="fas fa-network-wired"></i> LAN</a>
+    </nav>
+  </div>
+
   <div class="page">
     <div class="hero">
-      <h1>AutoPilot Monitoring</h1>
-      <p>Grafana uslubida oddiy monitoring. Server holati, CPU, xotira va yuk balansirovkasi barchasi bir joyda.</p>
-      <div class="badge-status"><i class="fas fa-robot"></i> AutoPilot</div>
-      <div style="margin-top: 18px; color: #cbd5e1;">Oxirgi yangilanish: {{ last_update or '—' }}</div>
-      <div style="margin-top: 18px;">
-        <a href="/view/management" class="btn btn-outline-light btn-lg"><i class="fas fa-cogs"></i> Boshqaruv sahifasiga o‘tish</a>
+      <h1>Aero Dashboard</h1>
+      <p>Serverlar holati, tizim resurslari va LAN tarmoqlar — barchasi bir joyda.</p>
+      <div class="update-badge"><span class="dot"></span> Jonli monitoring · <span id="lastUpdate">{{ last_update or '—' }}</span></div>
+    </div>
+
+    <div class="grid4">
+      <div class="metric blue">
+        <div class="metric-label">Aero LB</div>
+        <div class="metric-val" id="lbStatus">—</div>
+        <div class="metric-bar"><div class="fill blue" id="lbBar" style="width:5%"></div></div>
+      </div>
+      <div class="metric purple">
+        <div class="metric-label">CPU</div>
+        <div class="metric-val" id="cpuVal">—</div>
+        <div class="metric-bar"><div class="fill purple" id="cpuBar" style="width:5%"></div></div>
+      </div>
+      <div class="metric green">
+        <div class="metric-label">Xotira</div>
+        <div class="metric-val" id="memVal">—</div>
+        <div class="metric-bar"><div class="fill green" id="memBar" style="width:5%"></div></div>
+      </div>
+      <div class="metric orange">
+        <div class="metric-label">Disk</div>
+        <div class="metric-val" id="diskVal">—</div>
+        <div class="metric-bar"><div class="fill orange" id="diskBar" style="width:5%"></div></div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-header">
-        <div>
-          <div style="font-size: 1.1rem; font-weight: 700;">Monitoring Overview</div>
-          <div style="opacity: 0.75; margin-top: 4px;">Har 5 soniyada yangilanadi, Grafana uslubida sodda panel.</div>
-        </div>
-        <span>Visual simple status</span>
-      </div>
-      <div class="panel-body">
-        <div class="metrics">
-          <div class="metric-card">
-            <strong>Load Balancer</strong>
-            <div class="metric-value" id="lbStatus">Loading...</div>
-            <div class="metric-bar"><div id="lbLatencyBar" class="metric-fill" style="width: 20%; background: #0ea5e9;"></div></div>
-            <div class="metric-label"><span id="lbLatencyLabel">Latency</span><span id="lbLatencyValue">-- ms</span></div>
-          </div>
-          <div class="metric-card">
-            <strong>CPU ishlashi</strong>
-            <div class="metric-value" id="cpuPercent">Loading...</div>
-            <div class="metric-bar"><div id="cpuBar" class="metric-fill" style="width: 5%; background: #9333ea;"></div></div>
-            <div class="metric-label"><span>Current</span><span id="cpuLabel">--%</span></div>
-          </div>
-          <div class="metric-card">
-            <strong>Xotira</strong>
-            <div class="metric-value" id="memoryPercent">Loading...</div>
-            <div class="metric-bar"><div id="memoryBar" class="metric-fill" style="width: 5%; background: #0f766e;"></div></div>
-            <div class="metric-label"><span>Used</span><span id="memoryLabel">--%</span></div>
-          </div>
-          <div class="metric-card">
-            <strong>Disk ishlashi</strong>
-            <div class="metric-value" id="diskPercent">Loading...</div>
-            <div class="metric-bar"><div id="diskBar" class="metric-fill" style="width: 5%; background: #f97316;"></div></div>
-            <div class="metric-label"><span>Used</span><span id="diskLabel">--%</span></div>
-          </div>
-        </div>
-      </div>
+      <div class="panel-head"><h2><i class="fas fa-server"></i> &nbsp;Serverlar (Grafana UI)</h2><span class="sub" id="srvCount">0 ta server</span></div>
+      <div class="panel-body srv-grid" id="srvGrid"><div class="info-box">Yuklanmoqda...</div></div>
     </div>
 
     <div class="panel">
-      <div class="panel-header">
-        <div>Server status</div>
-        <span>Web serverlar holati</span>
-      </div>
-      <div class="panel-body server-grid" id="containersStatus">
-        <div class="info-box">Ma'lumotlar yuklanmoqda...</div>
-      </div>
+      <div class="panel-head"><h2><i class="fas fa-network-wired"></i> &nbsp;LAN Tarmoqlar</h2><span class="sub">RBAC portlari</span></div>
+      <div class="panel-body lan-grid" id="lanGrid"><div class="info-box">Yuklanmoqda...</div></div>
     </div>
 
     <div class="panel">
-      <div class="panel-header">
-        <div>Kirish manzillari</div>
-        <span>Tezkor server URL</span>
-      </div>
-      <div class="panel-body info-row">
-        <div class="info-box">
-          <strong>Load Balancer URL</strong>
-          <div>http://localhost:80</div>
-        </div>
-        <div class="info-box">
-          <strong>Mahalliy IP</strong>
-          <div id="lanIp">Loading...</div>
-        </div>
+      <div class="panel-head"><h2><i class="fas fa-link"></i> &nbsp;Kirish manzillari</h2></div>
+      <div class="panel-body info-grid">
+        <div class="info-box"><label>User LAN</label><div class="val"><a style="color:#a5b4fc" href="http://localhost:8082" target="_blank">http://localhost:8082</a></div></div>
+        <div class="info-box"><label>Admin LAN</label><div class="val"><a style="color:#a5b4fc" href="http://localhost:8080" target="_blank">http://localhost:8080</a></div></div>
+        <div class="info-box"><label>Reader LAN</label><div class="val"><a style="color:#a5b4fc" href="http://localhost:8081" target="_blank">http://localhost:8081</a></div></div>
+        <div class="info-box"><label>Mahalliy IP</label><div class="val" id="lanIp">—</div></div>
       </div>
     </div>
+    <div class="footer">Sahifa har 5 soniyada avtomatik yangilanadi</div>
+  </div>
 
-    <div class="footer">Sahifa avtomatik ravishda yangilanadi.</div>
+  <!-- Modal -->
+  <div class="modal-overlay" id="metricsModal" onclick="if(event.target===this) closeModal()">
+    <div class="modal">
+      <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
+      <div class="modal-title" id="modalTitle"><i class="fas fa-chart-area"></i> Metrikalar</div>
+      
+      <div class="modal-stats" id="modalStats">
+        <!-- JS fills this -->
+      </div>
+      
+      <div class="chart-container">
+        <canvas id="metricsChart"></canvas>
+      </div>
+    </div>
   </div>
 
   <script>
-    function setWidth(el, percent) {
-      el.style.width = Math.min(100, Math.max(0, percent)) + '%';
-    }
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.font.family = 'Inter';
+    let currentChart = null;
+    let modalInterval = null;
+    let currentModalTarget = null;
+    let currentModalType = null;
 
-    function toNumber(value) {
-      if (!value) return 0;
-      const number = parseFloat(value.toString().replace('%', '').trim());
-      return Number.isFinite(number) ? number : 0;
-    }
+    function num(v){if(!v)return 0;let n=parseFloat(String(v).replace('%',''));return isFinite(n)?n:0}
+    function bar(el,pct){el.style.width=Math.min(100,Math.max(0,pct))+'%'}
 
-    async function fetchData() {
-      try {
-        const response = await fetch('/api/status');
-        const data = await response.json();
-        const lb = data.load_balancer || {};
-        const servers = data.servers_status || [];
-        const host = data.host_info || {};
+    async function load(){
+      try{
+        const [statusRes,lanRes]=await Promise.all([fetch('/api/status'),fetch('/api/lan/networks')]);
+        const d=await statusRes.json();
+        const lanData=await lanRes.json();
+        const lb=d.load_balancer||{},h=d.host_info||{},servers=d.servers_status||[];
 
-        const lbStatus = lb.status || 'N/A';
-        document.getElementById('lbStatus').textContent = lbStatus;
-        document.getElementById('lbLatencyLabel').textContent = 'Latency';
-        document.getElementById('lbLatencyValue').textContent = lb.response_time_ms ? lb.response_time_ms + ' ms' : '--';
-        setWidth(document.getElementById('lbLatencyBar'), lb.response_time_ms && lb.response_time_ms !== 'N/A' ? Math.min(100, toNumber(lb.response_time_ms) / 3) : 5);
+        document.getElementById('lastUpdate').textContent=d.last_update||'—';
+        document.getElementById('lbStatus').textContent=lb.status||'N/A';
+        bar(document.getElementById('lbBar'),lb.response_time_ms&&lb.response_time_ms!=='N/A'?Math.min(100,num(lb.response_time_ms)/3):5);
 
-        const cpuPercent = host.cpu_percent || 'N/A';
-        const memoryPercent = host.memory_percent || 'N/A';
-        const diskPercent = host.disk_percent || 'N/A';
-        document.getElementById('cpuPercent').textContent = cpuPercent;
-        document.getElementById('memoryPercent').textContent = memoryPercent;
-        document.getElementById('diskPercent').textContent = diskPercent;
-        document.getElementById('cpuLabel').textContent = cpuPercent;
-        document.getElementById('memoryLabel').textContent = memoryPercent;
-        document.getElementById('diskLabel').textContent = diskPercent;
-        setWidth(document.getElementById('cpuBar'), toNumber(cpuPercent));
-        setWidth(document.getElementById('memoryBar'), toNumber(memoryPercent));
-        setWidth(document.getElementById('diskBar'), toNumber(diskPercent));
+        ['cpu','mem','disk'].forEach((k,i)=>{
+          const vals=[h.cpu_percent,h.memory_percent,h.disk_percent];
+          const ids=[['cpuVal','cpuBar'],['memVal','memBar'],['diskVal','diskBar']];
+          document.getElementById(ids[i][0]).textContent=vals[i]||'N/A';
+          bar(document.getElementById(ids[i][1]),num(vals[i]));
+        });
 
-        document.getElementById('lanIp').textContent = host.local_ip || 'N/A';
+        document.getElementById('lanIp').textContent=h.local_ip||'N/A';
+        document.getElementById('srvCount').textContent=servers.length+' ta server';
 
-        if (servers.length === 0) {
-          document.getElementById('containersStatus').innerHTML = '<div class="info-box">Hech qanday server topilmadi.</div>';
-        } else {
-          document.getElementById('containersStatus').innerHTML = servers.map(server => {
-            const healthy = server.healthy === true || server.status === 'UP';
-            const statusClass = healthy ? 'status-up' : (server.status === 'TIMEOUT' ? 'status-error' : 'status-down');
-            const label = healthy ? 'UP' : (server.status || 'DOWN');
-            return `
-              <div class="server-card">
-                <div>
-                  <h3>${server.name || 'Server'}</h3>
-                  <div class="status-pill ${statusClass}">${label}</div>
-                </div>
-                <div style="margin-top: 14px; color: #cbd5e1; font-size: 0.96rem;">
-                  ${server.url || ''}<br>${server.response_time_ms ? server.response_time_ms + ' ms' : ''}
-                </div>
-              </div>
-            `;
+        if(!servers.length){
+          document.getElementById('srvGrid').innerHTML='<div class="info-box">Server topilmadi</div>';
+        }else{
+          document.getElementById('srvGrid').innerHTML=servers.map(s=>{
+            const up=s.healthy||s.status==='UP';
+            const cls=up?'pill-up':(s.status==='TIMEOUT'?'pill-warn':'pill-down');
+            return `<div class="srv" onclick="openModal('server', '${s.name}')">
+              <h3>${s.name}</h3>
+              <span class="pill ${cls}">${up?'● UP':'● '+(s.status||'DOWN')}</span>
+              <div class="meta">${s.url||''}<br>${s.response_time_ms?s.response_time_ms+' ms':''}</div>
+            </div>`;
           }).join('');
         }
-      } catch (error) {
-        document.getElementById('containersStatus').innerHTML = '<div class="info-box" style="color:#ef4444;">Ma\'lumotlar yuklanishda xatolik yuz berdi.</div>';
+
+        const nets=lanData.networks||[];
+        if(!nets.length){
+          document.getElementById('lanGrid').innerHTML='<div class="info-box">LAN topilmadi</div>';
+        }else{
+          document.getElementById('lanGrid').innerHTML=nets.map(n=>`
+            <div class="lan-card ${n.role}" onclick="openModal('lan', '${n.id}', '${n.name}')">
+              <h3>${n.name}</h3>
+              <span class="role-badge ${n.role}">${n.role}</span>
+              <div class="port"><i class="fas fa-plug"></i> Port: ${n.port}</div>
+              <div class="desc">${n.description||''}</div>
+            </div>`).join('');
+        }
+      }catch(e){
+        console.error(e);
       }
     }
 
-    fetchData();
-    setInterval(fetchData, 5000);
+    async function updateModalData() {
+        if (!currentModalTarget) return;
+        const url = currentModalType === 'server' ? 
+            `/api/metrics/server/${currentModalTarget}` : 
+            `/api/metrics/lan/${currentModalTarget}`;
+            
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            if (currentModalType === 'server') {
+                document.getElementById('modalStats').innerHTML = `
+                    <div class="modal-stat-box"><div class="modal-stat-val">${data.active_users}</div><div class="modal-stat-lbl">Foydalanuvchilar</div></div>
+                    <div class="modal-stat-box"><div class="modal-stat-val">${data.requests_per_sec}</div><div class="modal-stat-lbl">So'rovlar (req/s)</div></div>
+                `;
+                renderChart(['CPU (%)', 'Memory (%)'], [data.cpu, data.memory], data.labels);
+            } else {
+                document.getElementById('modalStats').innerHTML = `
+                    <div class="modal-stat-box"><div class="modal-stat-val">${data.active_pcs}</div><div class="modal-stat-lbl">Aktiv Qurilmalar</div></div>
+                    <div class="modal-stat-box"><div class="modal-stat-val">${data.blocked_requests}</div><div class="modal-stat-lbl">Bloklangan so'rovlar</div></div>
+                `;
+                renderChart(['Bandwidth (MB/s)'], [data.bandwidth], data.labels);
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    function openModal(type, target, displayName = null) {
+        currentModalType = type;
+        currentModalTarget = target;
+        document.getElementById('modalTitle').innerHTML = `<i class="fas fa-${type==='server'?'server':'network-wired'}"></i> ${displayName || target} metrikalari`;
+        document.getElementById('metricsModal').classList.add('active');
+        updateModalData();
+        modalInterval = setInterval(updateModalData, 2000);
+    }
+
+    function closeModal() {
+        document.getElementById('metricsModal').classList.remove('active');
+        if (modalInterval) clearInterval(modalInterval);
+        currentModalTarget = null;
+    }
+
+    function renderChart(datasetsLabels, datasetsData, labels) {
+        const ctx = document.getElementById('metricsChart').getContext('2d');
+        const colors = [
+            { border: '#818cf8', bg: 'rgba(129, 140, 248, 0.2)' },
+            { border: '#34d399', bg: 'rgba(52, 211, 153, 0.2)' }
+        ];
+
+        const datasets = datasetsLabels.map((lbl, i) => ({
+            label: lbl,
+            data: datasetsData[i],
+            borderColor: colors[i].border,
+            backgroundColor: colors[i].bg,
+            borderWidth: 2,
+            pointRadius: 3,
+            fill: true,
+            tension: 0.4
+        }));
+
+        if (currentChart) {
+            currentChart.data.labels = labels;
+            currentChart.data.datasets = datasets;
+            currentChart.update('none');
+        } else {
+            currentChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        x: { grid: { display: false } }
+                    },
+                    plugins: { legend: { position: 'top' } }
+                }
+            });
+        }
+    }
+
+    load();setInterval(load,5000);
   </script>
 </body>
 </html>

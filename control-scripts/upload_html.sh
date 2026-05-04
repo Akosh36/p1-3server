@@ -5,7 +5,7 @@
 
 set -e
 
-PROJECT_DIR="/home/akobir/Documents/Projects/DProjects/p1-3server"
+PROJECT_DIR="/home/user/Documents/Projects/p1-3server"
 cd "$PROJECT_DIR"
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then

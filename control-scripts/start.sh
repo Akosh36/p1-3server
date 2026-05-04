@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-cd /home/akobir/Documents/Projects/DProjects/p1-3server
+cd /home/user/Documents/Projects/p1-3server
 
 # Stop and clean up existing containers
 docker stop load_balancer web_server_1 web_server_2 web_server_3 2>/dev/null || true

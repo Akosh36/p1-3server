@@ -5,7 +5,7 @@
 
 set -e
 
-PROJECT_DIR="/home/akobir/Documents/Projects/DProjects/p1-3server"
+PROJECT_DIR="/home/user/Documents/Projects/p1-3server"
 cd "$PROJECT_DIR"
 
 HOST_IP=${1:-"127.0.0.1"}
@@ -38,8 +38,8 @@ case $ACTION in
     services)
         echo "Checking services on $HOST_IP..."
 
-        # Check our web servers
-        for port in 8001 8002 8003 80; do
+        # Check our web servers (including RBAC ports)
+        for port in 8001 8002 8003 8082 8080 8081; do
             if timeout 5 bash -c "echo > /dev/tcp/$HOST_IP/$port" 2>/dev/null; then
                 echo "✓ Port $port is open"
             else
@@ -81,7 +81,7 @@ case $ACTION in
             netstat -tuln | grep LISTEN | head -10
             echo ""
             echo "Common service ports check:"
-            for port in 22 80 443 8001 8002 8003 8080 3306 5432; do
+            for port in 22 8082 443 8001 8002 8003 8080 8081 3306 5432; do
                 if timeout 3 bash -c "echo > /dev/tcp/localhost/$port" 2>/dev/null; then
                     echo "✓ Port $port is open"
                 fi

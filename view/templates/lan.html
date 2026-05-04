@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aero — LAN Boshqaruvi</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',system-ui,sans-serif;background:#0a0e1a;color:#e2e8f0;min-height:100vh}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 28px;background:rgba(15,23,42,0.85);backdrop-filter:blur(16px);border-bottom:1px solid rgba(99,102,241,0.15);position:sticky;top:0;z-index:100}
+    .topbar .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.15rem;color:#fff}
+    .topbar .logo i{color:#818cf8;font-size:1.3rem}
+    .topbar nav{display:flex;gap:6px}
+    .topbar nav a{padding:8px 18px;border-radius:10px;color:#94a3b8;text-decoration:none;font-weight:600;font-size:.88rem;transition:.2s}
+    .topbar nav a:hover,.topbar nav a.active{background:rgba(99,102,241,0.15);color:#a5b4fc}
+    .page{max-width:1100px;margin:0 auto;padding:24px 20px 48px}
+    .page-title{font-size:1.6rem;font-weight:800;margin-bottom:8px;color:#f1f5f9}
+    .page-desc{color:#64748b;font-size:.9rem;margin-bottom:24px}
+    .toast{position:fixed;top:80px;right:24px;padding:14px 22px;border-radius:12px;font-weight:600;font-size:.85rem;z-index:200;opacity:0;transform:translateY(-10px);transition:.3s;pointer-events:none}
+    .toast.show{opacity:1;transform:translateY(0);pointer-events:auto}
+    .toast.ok{background:rgba(34,197,94,0.9);color:#fff}
+    .toast.err{background:rgba(239,68,68,0.9);color:#fff}
+    .card{background:linear-gradient(135deg,rgba(30,41,59,0.9),rgba(15,23,42,0.95));border:1px solid rgba(99,102,241,0.1);border-radius:18px;overflow:hidden;margin-bottom:24px}
+    .card-head{padding:16px 20px;border-bottom:1px solid rgba(99,102,241,0.08);font-weight:700;font-size:.95rem;display:flex;align-items:center;gap:8px}
+    .card-head i{color:#818cf8}
+    .card-body{padding:20px}
+    .lan-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+    .lan-card{background:rgba(15,23,42,0.6);border:1px solid rgba(99,102,241,0.1);border-radius:16px;padding:22px;position:relative;overflow:hidden;transition:.25s}
+    .lan-card:hover{border-color:rgba(99,102,241,0.25);transform:translateY(-2px)}
+    .lan-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px}
+    .lan-card.admin::before{background:linear-gradient(90deg,#ef4444,#f97316)}
+    .lan-card.user::before{background:linear-gradient(90deg,#3b82f6,#06b6d4)}
+    .lan-card.reader::before{background:linear-gradient(90deg,#22c55e,#10b981)}
+    .lan-card.custom::before{background:linear-gradient(90deg,#8b5cf6,#a855f7)}
+    .lan-card .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+    .lan-card h3{font-size:1.05rem;font-weight:700}
+    .role-badge{display:inline-flex;padding:5px 12px;border-radius:99px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+    .role-badge.admin{background:rgba(239,68,68,0.15);color:#f87171}
+    .role-badge.user{background:rgba(59,130,246,0.15);color:#60a5fa}
+    .role-badge.reader{background:rgba(34,197,94,0.15);color:#4ade80}
+    .lan-card .info{display:grid;gap:8px;margin:14px 0}
+    .lan-card .info-item{display:flex;justify-content:space-between;font-size:.82rem}
+    .lan-card .info-item .k{color:#64748b}
+    .lan-card .info-item .v{color:#cbd5e1;font-weight:600}
+    .lan-card .desc{font-size:.8rem;color:#64748b;line-height:1.6;margin-bottom:14px}
+    .lan-card .perm{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+    .lan-card .perm span{padding:4px 10px;border-radius:8px;font-size:.7rem;font-weight:600;background:rgba(99,102,241,0.08);color:#a5b4fc}
+    .lan-card .actions{display:flex;gap:8px}
+    .btn{padding:8px 16px;border-radius:10px;border:none;font-family:inherit;font-weight:700;font-size:.78rem;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:.2s}
+    .btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
+    .btn-sm{padding:7px 12px;font-size:.72rem}
+    .btn-green{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff}
+    .btn-red{background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff}
+    .btn-blue{background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff}
+    .btn-purple{background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff}
+    .btn-outline{background:transparent;border:1px solid rgba(99,102,241,0.2);color:#a5b4fc}
+    .btn-outline:hover{background:rgba(99,102,241,0.1)}
+    select,input[type="text"],input[type="number"]{width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(99,102,241,0.15);background:rgba(15,23,42,0.8);color:#e2e8f0;font-size:.88rem;font-family:inherit;outline:none;transition:.2s}
+    select:focus,input:focus{border-color:#818cf8}
+    .form-group{margin-bottom:14px}
+    .form-group label{display:block;font-size:.75rem;font-weight:600;color:#94a3b8;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+    .form-row{display:grid;gap:12px;grid-template-columns:1fr 1fr}
+    .perm-table{width:100%;border-collapse:separate;border-spacing:0}
+    .perm-table th{text-align:left;padding:10px 14px;font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid rgba(99,102,241,0.1)}
+    .perm-table td{padding:10px 14px;font-size:.82rem;border-bottom:1px solid rgba(99,102,241,0.05)}
+    .perm-table .check{color:#4ade80;font-size:1rem}
+    .perm-table .cross{color:#f87171;font-size:1rem}
+    .status-active{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:.7rem;font-weight:700;background:rgba(34,197,94,0.12);color:#4ade80}
+    .status-inactive{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:.7rem;font-weight:700;background:rgba(239,68,68,0.12);color:#f87171}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo"><i class="fas fa-server"></i> Aero</div>
+    <nav>
+      <a href="/"><i class="fas fa-chart-line"></i> Dashboard</a>
+      <a href="/view/management"><i class="fas fa-cogs"></i> Boshqaruv</a>
+      <a href="/view/lan" class="active"><i class="fas fa-network-wired"></i> LAN</a>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <div class="page">
+    <h1 class="page-title"><i class="fas fa-network-wired" style="color:#818cf8"></i> LAN Tarmoqlar</h1>
+    <p class="page-desc">LAN tarmoqlarni boshqaring va har biriga Admin, User yoki Reader huquqini belgilang.</p>
+
+    <!-- Roles Permission Table -->
+    <div class="card">
+      <div class="card-head"><i class="fas fa-shield-halved"></i> Rollar va Ruxsatlar</div>
+      <div class="card-body">
+        <table class="perm-table">
+          <thead><tr><th>Ruxsat</th><th style="color:#f87171">Admin</th><th style="color:#60a5fa">User</th><th style="color:#4ade80">Reader</th></tr></thead>
+          <tbody>
+            <tr><td>O'qish (GET)</td><td class="check">✓</td><td class="check">✓</td><td class="check">✓</td></tr>
+            <tr><td>Yozish (POST)</td><td class="check">✓</td><td class="check">✓</td><td class="cross">✗</td></tr>
+            <tr><td>Serverlarni boshqarish</td><td class="check">✓</td><td class="cross">✗</td><td class="cross">✗</td></tr>
+            <tr><td>LAN boshqaruvi</td><td class="check">✓</td><td class="cross">✗</td><td class="cross">✗</td></tr>
+            <tr><td>Load Balancer sozlash</td><td class="check">✓</td><td class="cross">✗</td><td class="cross">✗</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- LAN Networks Grid -->
+    <div class="card">
+      <div class="card-head"><i class="fas fa-sitemap"></i> Mavjud Tarmoqlar</div>
+      <div class="card-body">
+        <div class="lan-grid" id="lanGrid">
+          {% for net in lan_config.networks %}
+          <div class="lan-card {{ net.role }}" data-id="{{ net.id }}">
+            <div class="head">
+              <h3>{{ net.name }}</h3>
+              <span class="{{ 'status-active' if net.active else 'status-inactive' }}">
+                <i class="fas fa-{{ 'circle' if net.active else 'circle-xmark' }}"></i>
+                {{ 'Faol' if net.active else 'Nofaol' }}
+              </span>
+            </div>
+            <span class="role-badge {{ net.role }}">{{ net.role }}</span>
+            <div class="info">
+              <div class="info-item"><span class="k">Port</span><span class="v">{{ net.port }}</span></div>
+              <div class="info-item"><span class="k">Yaratilgan</span><span class="v">{{ net.created_at[:10] }}</span></div>
+              <div class="info-item"><span class="k">IP Filter</span><span class="v">{{ net.allowed_ips | join(', ') }}</span></div>
+            </div>
+            <div class="desc">{{ net.description }}</div>
+            {% set perms = lan_config.roles.get(net.role, {}).get('permissions', []) %}
+            <div class="perm">
+              {% for p in perms %}<span>{{ p }}</span>{% endfor %}
+            </div>
+            <div class="actions">
+              <select class="role-select" data-id="{{ net.id }}" style="width:auto;padding:7px 10px;font-size:.78rem">
+                <option value="admin" {{ 'selected' if net.role == 'admin' }}>Admin</option>
+                <option value="user" {{ 'selected' if net.role == 'user' }}>User</option>
+                <option value="reader" {{ 'selected' if net.role == 'reader' }}>Reader</option>
+              </select>
+              <button class="btn btn-sm btn-outline toggle-btn" data-id="{{ net.id }}">
+                <i class="fas fa-power-off"></i> {{ 'O\'chirish' if net.active else 'Yoqish' }}
+              </button>
+              {% if net.id not in ['admin_lan', 'user_lan', 'reader_lan'] %}
+              <button class="btn btn-sm btn-red delete-btn" data-id="{{ net.id }}"><i class="fas fa-trash"></i></button>
+              {% endif %}
+              <a href="http://localhost:{{ net.port }}" target="_blank" class="btn btn-sm btn-outline" style="margin-left:auto"><i class="fas fa-external-link-alt"></i> Kirish</a>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Add New LAN -->
+    <div class="card">
+      <div class="card-head"><i class="fas fa-plus-circle"></i> Yangi LAN Tarmoq Qo'shish</div>
+      <div class="card-body">
+        <form id="addLanForm">
+          <div class="form-row">
+            <div class="form-group"><label>Tarmoq nomi</label><input type="text" id="lanName" placeholder="Office LAN" required></div>
+            <div class="form-group"><label>Port</label><input type="number" id="lanPort" placeholder="8090" min="8000" max="9999" required></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Rol</label>
+              <select id="lanRole"><option value="admin">Admin</option><option value="user" selected>User</option><option value="reader">Reader</option></select>
+            </div>
+            <div class="form-group"><label>Tavsif</label><input type="text" id="lanDesc" placeholder="Ofis tarmog'i"></div>
+          </div>
+          <button type="submit" class="btn btn-purple"><i class="fas fa-plus"></i> Qo'shish</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toast(msg,ok){
+      const t=document.getElementById('toast');
+      t.textContent=msg;t.className='toast '+(ok?'ok':'err')+' show';
+      setTimeout(()=>t.classList.remove('show'),3000);
+    }
+
+    async function api(url,data){
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      return r.json();
+    }
+
+    // Role change
+    document.querySelectorAll('.role-select').forEach(sel=>{
+      sel.addEventListener('change',async function(){
+        const res=await api('/api/lan/update-role',{id:this.dataset.id,role:this.value});
+        toast(res.message,res.success);
+        if(res.success)setTimeout(()=>location.reload(),800);
+      });
+    });
+
+    // Toggle
+    document.querySelectorAll('.toggle-btn').forEach(btn=>{
+      btn.addEventListener('click',async function(){
+        const res=await api('/api/lan/toggle',{id:this.dataset.id});
+        toast(res.success?'Holat o\'zgartirildi':'Xatolik',res.success);
+        if(res.success)setTimeout(()=>location.reload(),800);
+      });
+    });
+
+    // Delete
+    document.querySelectorAll('.delete-btn').forEach(btn=>{
+      btn.addEventListener('click',async function(){
+        if(!confirm('Bu tarmoqni o\'chirishni xohlaysizmi?'))return;
+        const res=await api('/api/lan/delete',{id:this.dataset.id});
+        toast(res.message,res.success);
+        if(res.success)setTimeout(()=>location.reload(),800);
+      });
+    });
+
+    // Add new LAN
+    document.getElementById('addLanForm').addEventListener('submit',async function(e){
+      e.preventDefault();
+      const res=await api('/api/lan/create',{
+        name:document.getElementById('lanName').value,
+        port:document.getElementById('lanPort').value,
+        role:document.getElementById('lanRole').value,
+        description:document.getElementById('lanDesc').value
+      });
+      toast(res.message,res.success);
+      if(res.success)setTimeout(()=>location.reload(),800);
+    });
+  </script>
+</body>
+</html>

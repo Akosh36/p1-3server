@@ -5,8 +5,11 @@
 
 set -e
 
-PROJECT_DIR="/home/akobir/Documents/Projects/DProjects/p1-3server"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
+
+NETWORK_NAME="p1-3server_lb_network"
 
 if [ $# -ne 2 ]; then
     echo "Usage: $0 <server_number> <port>"
@@ -17,9 +20,10 @@ fi
 SERVER_NUM=$1
 PORT=$2
 CONTAINER_NAME="web_server_${SERVER_NUM}"
+CONTAINER_IP="172.20.0.$((10 + SERVER_NUM))"
 
 # Check if server already exists
-if docker ps -a --format 'table {{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "ERROR: Server ${CONTAINER_NAME} already exists!"
     exit 1
 fi
@@ -32,44 +36,48 @@ fi
 
 echo "Creating Docker server: ${CONTAINER_NAME} on port ${PORT}"
 
-# Create nginx configuration for the new server
-cat > "nginx_${PORT}.conf" << EOF
-server {
-    listen ${PORT};
-    server_name localhost;
+# Ensure network exists
+if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    echo "Creating Docker network: $NETWORK_NAME"
+    docker network create --driver bridge --subnet 172.20.0.0/16 "$NETWORK_NAME" 2>/dev/null || true
+fi
 
+# Create specific NGINX configuration for this backend server
+CONF_FILE="nginx_${PORT}.conf"
+cat <<EOF > "$CONF_FILE"
+server {
+    listen 80;
+    server_name _;
     location / {
         root   /usr/share/nginx/html;
         index  index.html index.htm;
-        try_files \$uri \$uri/ =404;
-    }
-
-    location /health {
-        access_log off;
-        return 200 "healthy\n";
-        add_header Content-Type text/plain;
+        add_header X-Server-Port ${PORT};
     }
 }
 EOF
 
-# Start the Docker container
+# Start the Docker container with bridge network
 docker run -d \
     --name ${CONTAINER_NAME} \
-    --network host \
-    -e PORT=${PORT} \
-    -v ${PROJECT_DIR}/index.html:/usr/share/nginx/html/index.html:ro \
-    -v ${PROJECT_DIR}/nginx_${PORT}.conf:/etc/nginx/conf.d/default.conf:ro \
+    --network "$NETWORK_NAME" \
+    --ip "$CONTAINER_IP" \
+    -p "${PORT}:80" \
+    -v "${PROJECT_DIR}/${CONF_FILE}:/etc/nginx/conf.d/default.conf:ro" \
+    -v "${PROJECT_DIR}/index.html:/usr/share/nginx/html/index.html:ro" \
     --restart unless-stopped \
     nginx:alpine
 
-# Add server to load balancer configuration
+# Update nginx.conf upstream block
 if [ -f "nginx.conf" ]; then
-    # Check if server already exists in load balancer
-    if ! grep -q "server 127.0.0.1:${PORT};" nginx.conf; then
-        # Add upstream server
-        sed -i "/upstream backend {/a\\
-        server 127.0.0.1:${PORT} max_fails=3 fail_timeout=10s;" nginx.conf
+    if ! grep -q "server ${CONTAINER_NAME}:80" nginx.conf; then
+        sed -i "/upstream backend {/a\\        server ${CONTAINER_NAME}:80 max_fails=3 fail_timeout=10s;" nginx.conf
         echo "✓ Added server to load balancer configuration"
+        
+        # Reload load balancer if running
+        if docker ps --format '{{.Names}}' | grep -q "^load_balancer$"; then
+            docker exec load_balancer nginx -s reload 2>/dev/null || true
+            echo "✓ Load balancer reloaded"
+        fi
     fi
 fi
 

@@ -1,0 +1,72 @@
+{
+  "networks": [
+    {
+      "id": "admin_lan",
+      "name": "Admin LAN",
+      "port": 8080,
+      "role": "admin",
+      "description": "To'liq boshqaruv - serverlarni start/stop, konfiguratsiya o'zgartirish",
+      "created_at": "2026-05-04T08:00:00",
+      "allowed_ips": [
+        "*"
+      ],
+      "active": true
+    },
+    {
+      "id": "user_lan",
+      "name": "User LAN",
+      "port": 8082,
+      "role": "user",
+      "description": "Standart foydalanish - load balanced sahifalarni ko'rish",
+      "created_at": "2026-05-04T08:00:00",
+      "allowed_ips": [
+        "*"
+      ],
+      "active": true
+    },
+    {
+      "id": "reader_lan",
+      "name": "Reader LAN",
+      "port": 8081,
+      "role": "reader",
+      "description": "Faqat ko'rish - monitoring, serverlar holati",
+      "created_at": "2026-05-04T08:00:00",
+      "allowed_ips": [
+        "*"
+      ],
+      "active": true
+    }
+  ],
+  "roles": {
+    "admin": {
+      "label": "Admin",
+      "color": "#ef4444",
+      "permissions": [
+        "read",
+        "write",
+        "execute",
+        "manage_servers",
+        "manage_lan",
+        "configure_lb"
+      ],
+      "description": "To'liq boshqaruv huquqi"
+    },
+    "user": {
+      "label": "User",
+      "color": "#3b82f6",
+      "permissions": [
+        "read",
+        "write"
+      ],
+      "description": "Standart foydalanish huquqi"
+    },
+    "reader": {
+      "label": "Reader",
+      "color": "#22c55e",
+      "permissions": [
+        "read"
+      ],
+      "description": "Faqat o'qish huquqi"
+    }
+  }
+}

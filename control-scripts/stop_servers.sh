@@ -1,11 +1,12 @@
 #!/bin/bash
 # stop_servers.sh - Stop web servers
-# Usage: ./stop_servers.sh [server_number|all]
+# Usage: ./stop_servers.sh [server_number|all|lb]
 # Examples: ./stop_servers.sh 1, ./stop_servers.sh all
 
 set -e
 
-PROJECT_DIR="/home/akobir/Documents/Projects/DProjects/p1-3server"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 stop_server() {
@@ -28,9 +29,13 @@ stop_load_balancer() {
 if [ "$1" = "all" ]; then
     echo "Stopping all servers..."
     stop_load_balancer
-    stop_server 3
-    stop_server 2
-    stop_server 1
+    # Stop all web_server containers dynamically
+    for container in $(docker ps -a --filter "name=web_server_" --format "{{.Names}}" 2>/dev/null); do
+        num=${container##*_}
+        if [ -n "$num" ]; then
+            stop_server "$num"
+        fi
+    done
 elif [ "$1" = "lb" ]; then
     stop_load_balancer
 elif [[ "$1" =~ ^[0-9]+$ ]]; then

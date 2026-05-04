@@ -9,7 +9,7 @@ This project implements a **3-tier architecture** running locally on a LAN:
 ```
 ┌─────────────────────┐
 │   LAN Users         │
-│  (http://host:80)   │
+│  (http://host:8082) │
 └──────────┬──────────┘
            │
     ┌──────▼──────────────────┐
@@ -34,6 +34,14 @@ This project implements a **3-tier architecture** running locally on a LAN:
 ✅ **Health Monitoring:** Nginx upstream checks server availability with configurable timeouts  
 ✅ **Offline-Ready:** Entire system runs on local Docker network—no internet required  
 ✅ **Easy Simulation:** Test failover by stopping/killing containers  
+
+### Network Management & Role-Based Access Control (RBAC)
+
+The Load Balancer acts as a central gateway with multi-LAN support, providing role-based segregation of duties via specific ports:
+
+- **Admin LAN (Port 8080):** Full Control. Authorized for system configuration, server health monitoring, load balancer management, and project oversight. Connects directly to the management dashboard.
+- **Reader LAN (Port 8081):** View-Only/Auditor. Comprehensive read-only view of the project, architecture visibility, and user audit. State-modifying actions (e.g. POST requests, management views) are strictly blocked.
+- **User LAN (Port 8082):** Standard Access. Authorized only to connect to IPs and servers exposed by the Load Balancer for normal application usage.
 
 ---
 
