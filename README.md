@@ -211,6 +211,24 @@ The load balancer is configured with `max_fails=3` and `fail_timeout=10s`, meani
    ✅ Server rejoins the load-balancing pool automatically  
    ✅ Nginx will include it again in round-robin rotation
 
+### Automated Failover Check
+
+The manual steps above can also be run as a single scripted check:
+
+```bash
+control-scripts/check_failover.sh
+```
+
+The script uses `docker-compose.yml` (not the standalone `control-scripts/start.sh` setup) and:
+
+1. Brings the stack up with `docker compose up -d`.
+2. Waits for the load balancer's user-LAN health check (port 8082) to respond.
+3. Stops `web_server_2`, one of the backends in the `nginx.conf` upstream pool, to simulate a crash.
+4. Sends 10 requests through the load balancer and fails loudly if any of them don't return `200`.
+5. Restarts `web_server_2` and confirms it comes back up and the load balancer keeps serving requests.
+
+It exits `0` when failover and recovery both worked, and non-zero with a `FAIL:` message describing what broke otherwise. It does not tear the stack down afterward—run `control-scripts/stop.sh` or `docker compose down` when you're done.
+
 ---
 
 ## Understanding the Health Check Configuration
