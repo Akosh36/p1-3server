@@ -6,13 +6,14 @@ Two halves, split by privilege — never merge them:
   (`cmd/api`), the React admin panel. Runs in Docker via
   `deploy/docker/docker-compose.yml`.
 - **Data-plane** (root / `CAP_NET_ADMIN`, needs host networking): `netdiscd`,
-  `fwctl`, `lbd`, `capd`. Runs as systemd units directly on the Ubuntu
-  gateway host — never in a container — and exposes a localhost-only Unix
-  control socket under `/run/p13server/` that the API reads/writes.
+  `fwctl`, `lbd`, `capd`, `wgd`. Runs as systemd units directly on the
+  Ubuntu gateway host — never in a container — and exposes a
+  localhost-only Unix control socket under `/run/p13server/` that the API
+  reads/writes.
 
 This split exists so the API's own attack surface never carries the
-privileges its network operations need; see `docs/architecture.md`
-(added as each daemon ships) for why.
+privileges its network operations need; see `CLAUDE.md` (sections 4 and
+11) for the full architecture rationale.
 
 ## Control-plane (available now, Phase 0)
 

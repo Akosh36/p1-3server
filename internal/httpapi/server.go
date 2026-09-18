@@ -1,7 +1,7 @@
 // Package httpapi implements the control-plane REST API served by cmd/api.
 // It holds no special OS privileges: all privileged network operations are
-// delegated to the data-plane daemons (netdiscd, fwctl, lbd, capd) over
-// their local control sockets.
+// delegated to the data-plane daemons (netdiscd, fwctl, lbd, capd, wgd)
+// over their local control sockets.
 package httpapi
 
 import (

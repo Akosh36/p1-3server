@@ -1,7 +1,7 @@
 // Command api runs the control-plane REST API: authentication, RBAC, and
 // CRUD over devices/admins/server groups/LAN networks. It holds no special
 // OS privileges — see docs/deploy for how it relates to the privileged
-// data-plane daemons (netdiscd, fwctl, lbd, capd).
+// data-plane daemons (netdiscd, fwctl, lbd, capd, wgd).
 package main
 
 import (
