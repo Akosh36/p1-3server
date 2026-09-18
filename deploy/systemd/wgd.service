@@ -1,0 +1,51 @@
+[Unit]
+Description=p13server wgd - site-to-site WireGuard daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Creates and configures a real WireGuard interface — needs CAP_NET_ADMIN.
+# Running as root is the simplest correct option; CAP_NET_ADMIN alone (via
+# AmbientCapabilities) also works if you don't want a root service:
+#   AmbientCapabilities=CAP_NET_ADMIN
+#   User=p13server-wgd
+ExecStart=/usr/local/bin/wgd
+Restart=on-failure
+RestartSec=2s
+
+Environment=JWT_SECRET=unused-by-wgd-but-required-by-shared-config-loader
+Environment=WGD_SOCKET=/run/p13server/wgd.sock
+Environment=WGD_INTERFACE=wg0
+# This gateway's own address on the WireGuard tunnel subnet — pick any
+# private /24 not otherwise in use (it's a virtual link, not a real LAN).
+Environment=WGD_ADDRESS=10.99.0.1/24
+Environment=WGD_LISTEN_PORT=51820
+# Generated once on first start and reused across restarts (remote peers
+# identify this gateway by the public key derived from it — a new key on
+# every restart would silently break every existing tunnel).
+Environment=WGD_PRIVATE_KEY_PATH=/var/lib/p13server/wireguard/private.key
+# A peer counts as reachable if it handshook within this many seconds —
+# PersistentKeepalive (25s, set on every peer) keeps this close to
+# real-time even with no active traffic.
+Environment=WGD_REACHABLE_AFTER_SECONDS=150
+
+# Prefers the native kernel WireGuard interface (mainline since Linux 5.6 —
+# a stock Ubuntu Server LTS kernel has it); falls back to the userspace
+# wireguard-go implementation automatically if the kernel module isn't
+# available, exactly like wg-quick does. Install wireguard-tools always
+# (for the `wg` CLI wgd shells out to) and wireguard-go only if you expect
+# to need the fallback:
+#   apt-get install -y wireguard-tools wireguard-go
+
+RuntimeDirectory=p13server
+StateDirectory=p13server/wireguard
+StateDirectoryMode=0700
+
+# On stop, the interface (and, for the userspace fallback, the
+# wireguard-go process backing it) is torn down cleanly — there's no
+# "safe" state to leave a tunnel in once nothing is managing it, unlike
+# fwctl's deliberately persistent ruleset.
+
+[Install]
+WantedBy=multi-user.target

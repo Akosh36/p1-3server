@@ -113,6 +113,15 @@ type LANNetwork struct {
 	IsActive          bool           `json:"is_active"`
 	IsReachable       bool           `json:"is_reachable"`
 	LastStatusCheckAt *time.Time     `json:"last_status_check_at,omitempty"`
+
+	// Populated only for type=wireless_remote_vpn via a join on vpn_peers,
+	// so the LAN page can show a peer's own config without a separate
+	// vpn_peers CRUD surface — this app never reuses one peer across
+	// multiple LAN entries, so the 1:1 join is always enough.
+	VPNPublicKey       *string    `json:"vpn_public_key,omitempty"`
+	VPNAllowedSubnet   *string    `json:"vpn_allowed_subnet,omitempty"`
+	VPNEndpoint        *string    `json:"vpn_endpoint,omitempty"`
+	VPNLastHandshakeAt *time.Time `json:"vpn_last_handshake_at,omitempty"`
 }
 
 type ServerGroup struct {

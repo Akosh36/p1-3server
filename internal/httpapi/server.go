@@ -61,7 +61,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/switch-ports", s.handleListSwitchPorts)
 
 		r.Get("/api/lan-networks", s.handleListLANNetworks)
+		r.Post("/api/lan-networks/remote-vpn", s.handleCreateRemoteVPNLAN)
 		r.Patch("/api/lan-networks/{id}", s.handleUpdateLANNetwork)
+		r.Delete("/api/lan-networks/{id}", s.handleDeleteLANNetwork)
+
+		r.Get("/api/wireguard/local-info", s.handleWireGuardLocalInfo)
 
 		r.Get("/api/server-groups", s.handleListServerGroups)
 		r.Post("/api/server-groups", s.handleCreateServerGroup)

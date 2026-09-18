@@ -46,6 +46,15 @@ export interface LANNetwork {
   is_active: boolean
   is_reachable: boolean
   last_status_check_at?: string
+  vpn_public_key?: string
+  vpn_allowed_subnet?: string
+  vpn_endpoint?: string
+  vpn_last_handshake_at?: string
+}
+
+export interface WireGuardLocalInfo {
+  public_key: string
+  listen_port: number
 }
 
 export interface BackendServer {

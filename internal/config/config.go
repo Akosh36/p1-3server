@@ -1,6 +1,6 @@
 // Package config loads runtime configuration for every binary in this
-// repository (cmd/api, cmd/netdiscd, cmd/fwctl, cmd/lbd, cmd/capd) from
-// environment variables, keeping a single source of truth for defaults.
+// repository (cmd/api, cmd/netdiscd, cmd/fwctl, cmd/lbd, cmd/capd, cmd/wgd)
+// from environment variables, keeping a single source of truth for defaults.
 package config
 
 import (
@@ -25,6 +25,7 @@ type Config struct {
 	FwctlSocket   string
 	LbdSocket     string
 	CapdSocket    string
+	WgdSocket     string
 
 	// Paths
 	CaptureDir string
@@ -69,6 +70,7 @@ func Load() (*Config, error) {
 		FwctlSocket:    env("FWCTL_SOCKET", "/run/p13server/fwctl.sock"),
 		LbdSocket:      env("LBD_SOCKET", "/run/p13server/lbd.sock"),
 		CapdSocket:     env("CAPD_SOCKET", "/run/p13server/capd.sock"),
+		WgdSocket:      env("WGD_SOCKET", "/run/p13server/wgd.sock"),
 		CaptureDir:     env("CAPTURE_DIR", "/var/lib/p13server/captures"),
 	}
 

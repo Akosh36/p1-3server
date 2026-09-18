@@ -13,9 +13,9 @@ Bitta Ubuntu-server LAN'ning shlyuzi (gateway+NAT) bo'ladi va ikki qatlamga bo'l
 - **Control-plane** (imtiyozsiz): PostgreSQL + REST API (`cmd/api`, Go) + React admin
   panel (`web/`). Docker'da ishlaydi.
 - **Data-plane** (root/`CAP_NET_ADMIN`, host tarmog'ida): `netdiscd` (qurilma topish),
-  `fwctl` (nftables ACL), `lbd` (L4 load balancer), `capd` (pcap yozib olish).
-  systemd orqali to'g'ridan-to'g'ri host'da ishlaydi. Hozircha bosqichma-bosqich
-  qo'shilmoqda — pastdagi holatga qarang.
+  `fwctl` (nftables ACL), `lbd` (L4 load balancer), `capd` (pcap yozib olish),
+  `wgd` (site-to-site WireGuard). systemd orqali to'g'ridan-to'g'ri host'da
+  ishlaydi.
 
 Kirish huquqi ikki xil: **User** (faqat load balancing serverlarga) va **Admin**
 (load balancing + boshqaruv serverining o'ziga). Huquqsiz qurilma hech qayerga
@@ -32,7 +32,8 @@ kira olmaydi (default-deny).
 | Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ✅ Tayyor |
 | Phase 5 | `backendagentd` — backend serverlar metrikasi (push-agent) | ✅ Tayyor |
 | Phase 6 | `capd` — on-demand pcap yozib olish | ✅ Tayyor |
-| Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ Keyingi |
+| Phase 7 | `wgd` — site-to-site WireGuard (masofaviy Wireless LAN) | ✅ Tayyor |
+| Phase 8 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ⏳ Keyingi |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
 fayli, SNMP (boshqariladigan switch) va hostapd (lokal WiFi) orqali avtomatik
@@ -108,6 +109,22 @@ xatosi topilib tuzatildi: `Stop()` va fon jarayoni ikkalasi ham bir xil
 og'ir trafikda (5 MB fayl uzatilganda) `/captures/{id}/stop` chaqiruvi
 abadiy osilib qolardi.
 
+Va nihoyat, LAN sahifasidagi "Wireless (masofaviy) LAN" bo'limi endi
+haqiqiy: `wgd` har bir masofaviy sayt uchun real WireGuard tunnel ko'taradi
+(`wg`/`ip` buyruqlarini boshqarib — kernel WireGuard bo'lmasa
+`wireguard-go`ga avtomatik o'tadi, xuddi `wg-quick` kabi), `internal/wgsync`
+esa `vpn_peers`/`lan_networks`ni o'qib qaysi tunnel faol bo'lishi kerakligini
+hal qiladi va handshake asosidagi (haqiqiy real-vaqt, keraksiz ping'siz)
+reachability holatini bazaga yozadi. To'rt-namespace'li (ikkita "sayt" +
+ikkita "gateway" + ular orasidagi "internet") topologiyada haqiqiy,
+**to'liq shifrlangan** tunnel orqali sayt-dan-saytga ping muvaffaqiyatli
+o'tkazildi (oraliq "internet" havolasida faqat shifrlangan WireGuard
+UDP paketlari ko'rindi, oddiy ICMP emas — haqiqiy shifrlash tasdiqlandi),
+peer o'chirilganda/yoqilganda ulanish to'g'ri uzilib/tiklandi, va butun
+zanjir (real Postgres → API → wgd → orqaga Postgres, LAN sahifasidagi
+"+ Masofaviy LAN qo'shish" formasi va Active/Deactive tugmasi bilan
+birga) haqiqiy brauzerda (Playwright) xatosiz tasdiqlandi.
+
 ## Loyiha tuzilmasi
 
 ```
@@ -118,6 +135,7 @@ cmd/lbd/               L4 load balancer daemoni (Phase 4) entrypoint
 cmd/backendagentd/     Backend server metrikasi push-agenti (Phase 5) entrypoint —
                        gateway'da emas, har bir backend serverda ishlaydi
 cmd/capd/              On-demand pcap yozib olish daemoni (Phase 6) entrypoint
+cmd/wgd/               Site-to-site WireGuard daemoni (Phase 7) entrypoint
 internal/
   config/              Muhit o'zgaruvchilarini o'qish
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
@@ -138,6 +156,12 @@ internal/
                        server.go (Unix-socket)
   capdsync/             API tomonida: traffic_captures'ni boshqaruvchi, capd'ga
                         start/stop yuboruvchi, rotatsiya/kvota holatini yozuvchi
+  wg/                   wgd: keys.go (private key generatsiya/saqlash), iface.go
+                        (interfeys — kernel yoki wireguard-go fallback), manager.go
+                        (peer Sync/Status, route boshqaruvi), server.go (Unix-socket)
+  wgsync/               API tomonida: vpn_peers/lan_networks'ni o'qib qaysi peer
+                        faol bo'lishini hal qiluvchi, wgd'ga push qiluvchi,
+                        handshake/reachability holatini orqaga yozuvchi
 web/                   React + TypeScript + Vite admin paneli
 deploy/
   docker/              Control-plane uchun Dockerfile'lar va docker-compose.yml

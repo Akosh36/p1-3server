@@ -423,15 +423,114 @@ underlying tracking is byte-precise — a config-level rounding choice, not
 a code limitation. Capture of a device connected via the future Phase 7
 WireGuard tunnel hasn't been tested (no such tunnel exists yet).
 
-### Still not shipped: WireGuard site-to-site (Phase 7)
+### wgd (Phase 7 — shipped)
 
-Adds:
+Real site-to-site WireGuard: a second, physically remote LAN bridged to
+this one over an encrypted tunnel, with the LAN page's Active/Deactive
+button and reachability indicator now backed by an actual daemon instead
+of a bare database flag.
 
-1. WireGuard configuration (`wg-quick` or an equivalent) for the tunnel
-   itself — likely orchestrated rather than a new Go daemon, following
-   decision #4's "build on ready-made tools" precedent (dnsmasq for DHCP).
-2. Wiring `lan_networks`/`vpn_peers` (already in the schema since Phase 0)
-   to real Active/Deactive control and a real-vaqt reachability check.
+```bash
+apt-get install -y wireguard-tools   # wgd shells out to the real `wg` CLI
+# wireguard-go only if this kernel lacks native WireGuard support (rare on
+# a stock Ubuntu Server LTS — mainline since Linux 5.6):
+apt-get install -y wireguard-go
+go build -o /usr/local/bin/wgd ./cmd/wgd
+sudo cp deploy/systemd/wgd.service /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/wgd.service   # review WGD_ADDRESS/WGD_LISTEN_PORT
+sudo systemctl daemon-reload
+sudo systemctl enable --now wgd
+```
+
+Like the other data-plane daemons, wgd has no database access and follows
+decision #4 (build on ready-made tools): it doesn't reimplement WireGuard's
+crypto or protocol, it drives the real `wg`/`ip` CLIs (and generates its
+own long-lived private key with `wg genkey` the first time it starts,
+persisting it so this gateway's identity survives restarts — remote peers
+know it by the derived public key). `internal/wgsync` (in `cmd/api`) is
+the only thing that reads Postgres: every ~3s it computes which
+`vpn_peers` should currently be active — the peer itself must be active
+**and**, if a `lan_networks` row points at it (the LAN page's own
+Active/Deactive toggle), that row must be active too — pushes that list to
+wgd's `/sync`, and writes real handshake-based reachability back into
+`vpn_peers.last_handshake_at` / `lan_networks.is_reachable`.
+
+A peer counts as "reachable" if it handshook within `WGD_REACHABLE_AFTER_SECONDS`
+(default 150s); every peer gets `PersistentKeepalive=25s` so this stays
+close to real-time even with no LAN traffic actually flowing, satisfying
+the spec's "real-vaqtda, kam kechikish bilan" requirement without needing
+to ping into the remote subnet at all. Creating a remote LAN from the LAN
+page (`POST /api/lan-networks/remote-vpn`) creates both the `vpn_peers`
+row (the remote site's public key, its LAN subnet as `AllowedIPs`, and its
+endpoint) and the `lan_networks` row together in one step — this app never
+reuses one peer across multiple LAN entries, so there was no reason to
+make that two separate admin actions. `GET /api/wireguard/local-info`
+exposes wgd's own public key/port so the admin can hand it to the remote
+site's admin (site-to-site WireGuard needs both ends configured with each
+other's public key).
+
+**One thing `wg` (unlike `wg-quick`) does not do: manage routes.** Setting
+a peer's `AllowedIPs` only tells WireGuard's own cryptorouting which
+packets belong to which peer — it does not touch the kernel routing
+table. `internal/wg`'s `Sync` explicitly runs `ip route replace <remote
+subnet> dev wg0` for every active peer (and removes it when the peer is
+removed) to cover the gap that `wg-quick`'s wrapper script normally
+papers over. No changes were needed in `internal/firewall`: `lan_forward`'s
+existing `ct state established,related accept` plus its MAC-source-match
+rules (added in Phase 2, unmodified since) don't restrict by egress
+interface at all, so traffic from an already-granted LAN device toward a
+peer's subnet via wg0 is accepted by the exact same rules that already
+cover WAN and backend-VIP traffic — verified by reading the generated
+ruleset rather than by re-running the Phase 2 test suite a second time.
+
+**Verified with a real, fully encrypted tunnel between two simulated
+gateways, then with the real control-plane loop and a real browser.** A
+4-namespace topology (`siteA` ↔ `gwA` ↔ [simulated internet] ↔ `gwB` ↔
+`siteB`) was built with real IP addresses on both "public" and "LAN"
+sides. Each `gwd` instance generated its own real keypair; configuring
+them as each other's peer produced a real WireGuard handshake, and `ping`
+from `siteA` to `siteB` succeeded end-to-end (TTL 62, confirming two real
+routed hops) — with `tcpdump` on the simulated internet link showing
+**only opaque UDP/51820 packets**, no plaintext ICMP at all, confirming
+genuine encryption rather than an accidental unencrypted passthrough.
+Removing the peer immediately cut connectivity and removed the route;
+re-adding it restored both. The full control-plane loop was then exercised
+against a real local Postgres: `POST /api/lan-networks/remote-vpn`
+created both rows, the next `wgsync` tick pushed the peer and the tunnel
+came up — again with real cross-site `ping` succeeding — and
+`is_reachable`/`last_handshake_at` were confirmed correct in the database.
+Toggling `is_active` via the same `PATCH` endpoint the LAN page's button
+calls tore the tunnel down and flipped `is_reachable` to `false` honestly
+(not just "stopped updating"); re-toggling restored it; `DELETE` removed
+both rows and the peer. The LAN page itself was checked in a real headless
+browser (Playwright): the local public key displays and copies, the
+"+ Masofaviy LAN qo'shish" form creates a real tunnel, the expandable
+detail row shows the peer's real config and handshake time, and the
+Active/Deactive toggle and delete both work — zero console errors
+throughout.
+
+**Real, non-code discovery from this testing:** the userspace `wireguard-go`
+fallback's control socket lives at a fixed, host-wide path
+(`/run/wireguard/<ifname>.sock`) that is **not** network-namespace-scoped.
+Running two `wgd` instances in separate namespaces on the same host with
+the same interface name (`wg0`) collided on that path and the second
+instance's interface never appeared. This only matters for exactly this
+kind of same-host multi-namespace testing — in a real deployment each
+site-to-site gateway is a separate machine, so the path is never shared —
+but it's why the test topology above uses distinct interface names
+(`wgA0`/`wgB0`) per side, and why deploying two wgd instances on one real
+host (unusual, but possible) would need distinct `WGD_INTERFACE` values
+too if either ever falls back to userspace mode.
+
+**Known limitations:** `AllowedIPs`/routing here only carries one CIDR per
+peer (`vpn_peers.allowed_subnet` is a single `CIDR` column) — a remote
+site with multiple non-contiguous subnets needs one `vpn_peers`/`lan_networks`
+pair per subnet, which works but isn't the most convenient shape.
+Capturing a device's traffic (Phase 6, capd) when that device sits behind
+a WireGuard tunnel hasn't been tested, since capd filters by Ethernet MAC
+and a device on the far side of a routed L3 tunnel never puts its own MAC
+on this gateway's LAN interface — matching capd's documented scope (LAN
+devices only, not remote-VPN ones).
 
 ## Local development (no Docker)
 

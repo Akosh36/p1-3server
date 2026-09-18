@@ -26,6 +26,7 @@ import (
 	"github.com/Akosh36/p1-3server/internal/lbsync"
 	"github.com/Akosh36/p1-3server/internal/metrics"
 	"github.com/Akosh36/p1-3server/internal/models"
+	"github.com/Akosh36/p1-3server/internal/wgsync"
 )
 
 func main() {
@@ -64,6 +65,7 @@ func main() {
 	go aclsync.Run(ctx, pool, cfg.FwctlSocket, 2*time.Second)
 	go lbsync.Run(ctx, pool, cfg.LbdSocket, 3*time.Second)
 	go capdsync.Run(ctx, pool, cfg.CapdSocket, cfg.CaptureDir, 2*time.Second)
+	go wgsync.Run(ctx, pool, cfg.WgdSocket, 3*time.Second)
 
 	srv := httpapi.New(pool, cfg)
 	httpServer := &http.Server{

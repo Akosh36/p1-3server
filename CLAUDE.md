@@ -194,7 +194,7 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 | Firewall | **nftables** | Zamonaviy Linux standarti, named sets — Phase 2'da tayyor va real sinaldi |
 | L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh — Phase 4'da tayyor, real sinaldi |
 | Paket ushlash | Real **tcpdump** subprocess asosida `capd` | .pcap to'g'ridan-to'g'ri Wireshark'da ochiladi — Phase 6'da tayyor, real sinaldi |
-| VPN | **WireGuard** | Eng tez va sodda site-to-site (hali yozilmagan — Phase 7) |
+| VPN | **WireGuard** (`wgd`, real `wg`/`ip` boshqaruvi) | Eng tez va sodda site-to-site — Phase 7'da tayyor, real sinaldi |
 | Frontend | **React + TypeScript + Vite + TailwindCSS** | Zamonaviy, minimalist |
 | Grafiklar | **Recharts** + `dataviz` skill palitrasi | Validatsiya qilingan ranglar (`node scripts/validate_palette.js`) |
 | Auth | JWT (`golang-jwt/jwt/v5`) + bcrypt (`golang.org/x/crypto`) + TOTP (`pquerna/otp`) | Standart, xavfsiz |
@@ -223,8 +223,13 @@ access_grants(id, device_id UNIQUE, role[user|admin], granted_by, granted_at)
 switch_ports(id, switch_name, port_number, label, vlan, link_status, last_change_at)
 
 vpn_peers(id, name, public_key, allowed_subnet, endpoint, is_active, last_handshake_at)
+  -- Phase 0'dan beri sxemada bor edi, Phase 7'da birinchi marta haqiqiy
+  -- ma'no oldi — hech qanday yangi migratsiya kerak bo'lmadi
 
 lan_networks(id, name, type, vpn_peer_id, is_active, is_reachable, last_status_check_at)
+  -- type='wireless_remote_vpn' bo'lganda vpn_peer_id orqali yuqoridagisiga
+  -- bog'lanadi; is_active shu yerdagi "Active/Deactive tugmasi", ikkalasi
+  -- (bu va vpn_peers.is_active) faol bo'lishi kerak tunnel ko'tarilishi uchun
 
 server_groups(id, nickname, color_hex, vip_address, vip_port, protocol,
               algorithm[round_robin|least_conn], is_active, created_at)
@@ -269,6 +274,8 @@ cmd/backendagentd/main.go  Backend server metrikasi push-agenti (Phase 5) — ga
                            AGENT_TOKEN talab qiladi
 cmd/capd/main.go         capd entrypoint (CAPD_INTERFACE talab qiladi, socket serveri,
                          kvota-enforcement fon jarayoni)
+cmd/wgd/main.go          wgd entrypoint (WGD_ADDRESS talab qiladi, interfeys +
+                         socket serveri)
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
@@ -301,6 +308,17 @@ internal/
                            tsikli: start/rotate/live-size), RotateCapture (avtomatik VA
                            "Yuklab olish" ikkalasi ham shu orqali), StartCapture/
                            StopCapture/ReadCaptureFile (httpapi uchun bevosita chaqiruvlar)
+  wg/                     wgd: types.go (Peer/Status wire tiplari), keys.go (`wg genkey`
+                           bilan generatsiya, doimiy saqlash), iface.go (interfeys —
+                           kernel `ip link add type wireguard`, bo'lmasa `wireguard-go -f`
+                           fallback, bitta cmd.Wait() qoidasi bilan), manager.go (Sync —
+                           peer va route boshqaruvi, Status — handshake asosidagi
+                           reachability), server.go (Unix-socket: /sync, /status)
+  wgsync/                 API tomonida: vpn_peers/lan_networks'ni o'qib qaysi peer
+                           faol bo'lishini (ikkalasi ham active bo'lishi kerak) hal
+                           qiluvchi, wgd'ga push qiluvchi, handshake/reachability
+                           holatini orqaga yozuvchi, LocalInfo (httpapi uchun
+                           bevosita chaqiruv — bu gateway'ning public key/porti)
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
   src/context/            AuthContext (JWT holati)
@@ -315,6 +333,7 @@ deploy/
   systemd/backendagentd.service  backendagentd uchun tayyor unit fayl (backend serverga
                           o'rnatiladi, gateway'ga emas — AGENT_API_URL/AGENT_TOKEN kerak)
   systemd/capd.service    capd uchun tayyor unit fayl (CAPD_INTERFACE sozlanishi kerak)
+  systemd/wgd.service     wgd uchun tayyor unit fayl (WGD_ADDRESS ko'rib chiqilishi kerak)
   dnsmasq/p13server.conf.example  Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiyasi
   nftables/               Bo'sh — nftables qoidalari kod orqali (internal/firewall) generatsiya
                            qilinadi, statik fayl sifatida saqlanmaydi
@@ -797,11 +816,107 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   ulangan qurilmalar uchun capture hali sinalmagan (Phase 7'dan keyingi
   masala).
 
+### ✅ Phase 7 — tayyor va real sinaldi (haqiqiy, to'liq shifrlangan WireGuard tunnel + `ip netns` + real brauzer)
+
+- **Qaror #11 (WireGuard) so'zma-so'z amalga oshirildi**, qaror #4 (tayyor
+  vositalar ustida qurish) bilan birga: `wgd` WireGuard kriptografiyasini
+  qayta yozmaydi, haqiqiy `wg`/`ip` buyruqlarini boshqaradi.
+- **Arxitektura — capd/capdsync'ga o'xshash bo'linish:**
+  - `internal/wg` (data-plane): `Start()` bir marta (`wg genkey` bilan)
+    doimiy private key yaratadi/o'qiydi (qayta ishga tushirilganda ham
+    bir xil public key qolishi kerak — aks holda masofaviy tomon uchun
+    bu gateway "boshqa qurilma" bo'lib qoladi), interfeysni ko'taradi:
+    avval haqiqiy kernel WireGuard (`ip link add type wireguard`),
+    bo'lmasa **`wireguard-go -f`** fallback — bu sandbox'da kernel
+    modul yo'qligi sababli har doim shu yo'l ishlatildi, lekin bu
+    `wg-quick`ning o'zi ham qiladigan haqiqiy production fallback,
+    faqat sinov uchun qo'shilgan soxta yo'l emas.
+  - `Sync(peers)` — xohlangan peer ro'yxatini joriy holat bilan
+    solishtirib, keraksizlarni o'chiradi, kerakli/yangilarini
+    `wg set ... allowed-ips ... persistent-keepalive 25` bilan qo'shadi.
+    **Muhim topilma:** xom `wg` (farqli o'laroq `wg-quick`dan) marshrut
+    (route) jadvaliga umuman tegmaydi — `AllowedIPs` faqat WireGuard'ning
+    o'z shifrlash/marshrutlash mantig'iga tegishli. Shuning uchun `Sync`
+    har bir peer uchun alohida `ip route replace <masofaviy subnet> dev
+    <iface>` chaqiradi (peer o'chirilganda `ip route del`) — `wg-quick`
+    o'rovchi skripti odatda shuni "ko'rinmas" qilib bajaradi.
+  - `Status()` — `wg show <iface> dump`ni tahlil qilib (`parseDump`,
+    sof funksiya, unit test bilan qoplangan), har bir peer uchun
+    `last_handshake_at` va shundan hisoblangan `is_reachable` (standart
+    150 soniya ichida handshake bo'lsa — `WGD_REACHABLE_AFTER_SECONDS`)
+    qaytaradi. Har bir peer uchun `PersistentKeepalive=25s` doim
+    o'rnatiladi — shu orqali "real-vaqtda, kam kechikish bilan
+    tekshirish" talabi trafik bo'lmasa ham bajariladi, masofaviy subnet
+    ichiga alohida ping yubormasdan.
+  - `internal/wgsync` (control-plane, yagona qaror joyi) — har ~3
+    soniyada `vpn_peers`ni o'qiydi: bir peer faol bo'lishi uchun
+    **ikkalasi ham** kerak — `vpn_peers.is_active` VA (agar unga
+    bog'langan `lan_networks` qatori bo'lsa) o'sha qatorning
+    `is_active`i (bu — LAN sahifasidagi Active/Deactive tugmasi).
+    Deaktivatsiya qilingan (yoki hech qachon push qilinmagan) peer
+    uchun `is_reachable` har doim `false`ga qaytariladi — eski
+    "reachable" holati muzlab qolmaydi.
+  - `POST /api/lan-networks/remote-vpn` — `vpn_peers` va `lan_networks`
+    qatorlarini **bitta tranzaksiyada birga** yaratadi (bu ilova bitta
+    peer'ni bir nechta LAN yozuviga bog'lamaydi, shuning uchun ikkita
+    alohida admin amaliga ehtiyoj yo'q). `GET /api/wireguard/local-info`
+    — bu gateway'ning o'z public key/portini qaytaradi (masofaviy
+    tomon administratoriga berish uchun — site-to-site WireGuard
+    ikkala tomon ham bir-birining public key'ini bilishini talab qiladi).
+- **Sinov — 4-namespace'li site-to-site topologiya, keyin haqiqiy
+  Postgres + haqiqiy brauzer:**
+  1. `siteA` ↔ `gwA` ↔ [simulyatsiya qilingan internet] ↔ `gwB` ↔
+     `siteB` qurilib, har ikkala `gwd` (turli interfeys nomlari bilan —
+     pastdagi topilmaga qarang) o'z haqiqiy kalitlarini yaratdi. Ular
+     bir-birining peer'i qilib sozlanganda **haqiqiy WireGuard
+     handshake** sodir bo'ldi, va `siteA`dan `siteB`ga ping **to'liq
+     ishladi** (TTL 62 — ikkita haqiqiy marshrutlangan hop orqali).
+  2. **Shifrlash haqiqatan tasdiqlandi**: simulyatsiya qilingan
+     "internet" havolasida `tcpdump` faqat shifrlangan UDP/51820
+     paketlarini ko'rsatdi — oddiy ICMP butunlay ko'rinmadi, ya'ni LAN
+     A↔LAN B trafigi to'liq WireGuard tuneli ichida yashiringan edi.
+  3. Peer o'chirilganda (`{"peers": []}`) ulanish darhol uzildi va
+     marshrut yo'qoldi; qayta qo'shilganda ikkalasi ham tiklandi.
+  4. **To'liq boshqaruv zanjiri haqiqiy Postgres bilan**: real `cmd/api`
+     (`internal/wgsync` bilan) orqali `POST /api/lan-networks/remote-vpn`
+     chaqirilib, keyingi tsikl avtomatik tunnel'ni ko'tardi — yana
+     `ping` bilan tasdiqlandi, `is_reachable`/`last_handshake_at` bazada
+     to'g'ri yozilgani ko'rildi.
+  5. LAN sahifasining aynan o'zi chaqiradigan `PATCH .../is_active`
+     orqali o'chirish/yoqish — tunnel to'g'ri uzildi/tiklandi,
+     `is_reachable` **halol** `false`ga tushdi (shunchaki yangilanishni
+     to'xtatib qo'ymadi). `DELETE` ikkala qatorni ham o'chirdi.
+  6. **LAN sahifasi haqiqiy headless brauzerda** (Playwright) tekshirildi:
+     bu serverning public key'i ko'rinadi va nusxalanadi, "+ Masofaviy
+     LAN qo'shish" formasi haqiqiy tunnel yaratadi, "Tafsilot" qatori
+     peer'ning haqiqiy konfiguratsiyasi va handshake vaqtini ko'rsatadi,
+     Active/Deactive tugmasi va "O'chirish" ikkalasi ham ishladi.
+     Hammasi brauzer konsolida bironta xatosiz.
+- **Kod bo'lmagan, real topilma:** `wireguard-go` fallback'ining boshqaruv
+  socket'i qattiq belgilangan, tarmoq-nomlar-maydonidan mustaqil yo'lda
+  (`/run/wireguard/<interfeys>.sock`) yashaydi. Bitta hostda, turli
+  network namespace'larda, bir xil interfeys nomi (`wg0`) bilan ikkita
+  `wgd` ishga tushirilganda ikkinchisi shu yo'lda to'qnashib, interfeys
+  hech qachon paydo bo'lmadi. Bu FAQAT shu sinov uslubiga xos (bitta
+  haqiqiy serverda ikkita "gateway"ni netns orqali simulyatsiya qilish)
+  — haqiqiy joylashtirishda har bir sayt alohida mashina, shuning uchun
+  bu yo'l hech qachon umumiy bo'lmaydi. Sinovda `wgA0`/`wgB0` kabi turli
+  interfeys nomlari ishlatilib chetlab o'tildi.
+- **Bilingan cheklovlar:** bitta peer uchun faqat bitta CIDR
+  (`vpn_peers.allowed_subnet` — CIDR ustuni) — bir nechta uzluksiz
+  bo'lmagan subnetli masofaviy sayt uchun har bir subnet uchun alohida
+  `vpn_peers`/`lan_networks` jufti kerak bo'ladi (ishlaydi, lekin eng
+  qulay shakl emas). WireGuard tuneli ortidagi qurilmaning trafigini
+  `capd` (Phase 6) bilan yozib olish sinalmagan — `capd` Ethernet MAC
+  bo'yicha filtrlaydi, marshrutlangan L3 tunnelning narigi tomonidagi
+  qurilma esa hech qachon o'z MAC'ini bu gateway'ning LAN interfeysida
+  ko'rsatmaydi (bu `capd`ning hujjatlashtirilgan qamrovi — faqat LAN
+  qurilmalari, masofaviy-VPN emas).
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
 ---
@@ -895,22 +1010,30 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 ## 12. Keyingi qadam
 
 Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
-Phase 4 (`lbd`), Phase 5 (`backendagentd`) va Phase 6 (`capd`) tayyor va
-real sinaldi — bo'lim 8'ga qarang. Bu server endi to'liq ishlaydigan LAN
-gateway, load balancer **va** trafik yozib oluvchi tizim: DHCP beradi,
-kirish huquqini nazorat qiladi, ruxsat berilganlarni internetga NAT bilan
-chiqaradi, `lan_forward`dagi ruxsat berilgan trafikni haqiqiy VIP'lar
-orqali orqadagi serverlarga taqsimlaydi, har bir backend serverning o'z
-host metrikasi ko'rinadi, va endi admin istalgan userning trafigini
-on-demand pcap sifatida yozib, Wireshark'da tekshira oladi. Bo'lim
-2.3'dagi "Har bir bo'lim uchun talablar" jadvalidagi barcha qatorlar endi
-haqiqiy, ishlaydigan funksionallik bilan qoplangan — faqat **Wireless
-remote LAN** (WireGuard, qaror #11) qolmoqda. Navbatdagi ish —
-**Phase 7: WireGuard site-to-site** — masofadagi ikkinchi LAN tarmog'ini
-shu platformaga xavfsiz tunnel orqali bog'lash, LAN sahifasidagi
-"Wireless (masofaviy) LAN" bo'limini Active/Deactive tugmasi va real-vaqt
-reachability tekshiruvi bilan to'ldirish (`lan_networks`/`vpn_peers`
-jadvallari Phase 0'dan beri tayyor turibdi, hali hech narsa yozmagan).
-Shundan keyin Phase 8 (RBAC to'liq qo'llanilishi, xavfsizlik audit)
-navbatda. Har bosqich tugagach ushbu faylni va
+Phase 4 (`lbd`), Phase 5 (`backendagentd`), Phase 6 (`capd`) va Phase 7
+(`wgd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Bo'lim 2.3'dagi "Har
+bir bo'lim uchun talablar" jadvalidagi **barcha qatorlar** endi haqiqiy,
+ishlaydigan funksionallik bilan qoplangan: bu server to'liq ishlaydigan
+LAN gateway, load balancer, trafik yozib oluvchi tizim **va** site-to-site
+VPN — DHCP beradi, kirish huquqini nazorat qiladi, ruxsat berilganlarni
+internetga NAT bilan chiqaradi, `lan_forward`dagi ruxsat berilgan
+trafikni haqiqiy VIP'lar orqali orqadagi serverlarga taqsimlaydi, har bir
+backend serverning o'z host metrikasi ko'rinadi, admin istalgan userning
+trafigini on-demand pcap sifatida yozib Wireshark'da tekshira oladi, va
+endi masofadagi ikkinchi LAN tarmog'i haqiqiy, shifrlangan WireGuard
+tuneli orqali bog'lanib, LAN sahifasida Active/Deactive qilinadi va
+real-vaqtda reachability'i ko'rinadi.
+
+Navbatdagi ish — **Phase 8: RBAC'ning API bo'ylab to'liq qo'llanilishi,
+xavfsizlik audit, dizayn siyqallashtirish** — bu endi yangi tarmoq
+funksiyasi emas, balki mavjud 7 bosqichni qattiqlashtirish bosqichi:
+har bir endpoint'ning `requireAuth`/`requireSuperAdmin` qo'llanilishini
+qayta ko'rib chiqish, xavfsizlik zaifliklarini qidirish (masalan admin
+JWT muddati, parol siyosati, audit log to'liqligi), va 7 bosqich
+davomida to'planib qolgan kichik UI/UX nomutanosibliklarni tekshirish.
+Bu boshqa bosqichlardan farqli — aniq bitta yangi daemon yoki funksiya
+emas, shuning uchun boshlashdan oldin foydalanuvchidan aniq qamrov
+so'rash kerak bo'ladi (masalan: "audit" nimani anglatadi — kod
+review'mi, avtomatlashtirilgan xavfsizlik skaneri, yoki muayyan
+zaifliklarni qidirishmi). Har bosqich tugagach ushbu faylni va
 `README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.
