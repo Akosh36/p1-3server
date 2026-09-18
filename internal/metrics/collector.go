@@ -41,8 +41,8 @@ func Run(ctx context.Context, pool *pgxpool.Pool, interval time.Duration) {
 func insert(ctx context.Context, pool *pgxpool.Pool, s hostmetrics.Sample) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO system_metrics
-			(cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, s.CPUPercent, s.MemPercent, s.DiskReadBps, s.DiskWriteBps, s.NetInBps, s.NetOutBps, s.DiskPercent)
+			(cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent, gpu_percent, gpu_mem_percent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, s.CPUPercent, s.MemPercent, s.DiskReadBps, s.DiskWriteBps, s.NetInBps, s.NetOutBps, s.DiskPercent, s.GPUPercent, s.GPUMemPercent)
 	return err
 }

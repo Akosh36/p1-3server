@@ -533,6 +533,70 @@ and a device on the far side of a routed L3 tunnel never puts its own MAC
 on this gateway's LAN interface — matching capd's documented scope (LAN
 devices only, not remote-VPN ones).
 
+### Per-user backend traffic accounting + GPU metrics (Phase 8 — shipped)
+
+No new daemon or systemd unit — this phase adds one migration
+(`0004_gpu_metrics.up.sql`) and extends two existing components already
+covered above: `lbd`/`lbsync` (Phase 4) and `internal/hostmetrics`
+(shared by Phase 0's `internal/metrics` and Phase 5's `backendagentd`).
+Run the migration by restarting `cmd/api` (migrations apply automatically
+on startup) — no config changes needed for either existing daemon.
+
+**Traffic accounting:** `lbd` now counts real bytes in both directions for
+every proxied TCP connection (`io.Copy`'s return value, via `atomic.Int64`)
+and accumulates them in memory keyed by `(vip_address, client_ip)`, exposed
+over a new `GET /traffic` endpoint on the same Unix socket as `/sync` and
+`/status`. Reading it **drains** the counters (each poll returns everything
+since the last one), so `lbd` never needs to track "already reported"
+state itself. `internal/lbsync` polls this every tick alongside the
+existing push/pull, and resolves each `(vip_address, client_ip)` pair
+against `server_groups`/`devices` with a single `INSERT ... SELECT`
+(`device_traffic_stats`, a table that has existed since Phase 0's initial
+schema but was never written to until now) — an entry whose IP doesn't
+match a known device, or whose VIP doesn't match an active group, is
+silently dropped rather than guessed at. A new endpoint,
+`GET /api/devices/{id}/traffic`, aggregates that table per server group
+(`SUM(bytes_in)`, `SUM(bytes_out)`, `MAX(time)`) for the Users page's new
+"Trafik" expandable row.
+
+**Verified with real traffic in a 2-namespace topology** (`lbtest-cli` ↔
+`lbtest-gw` running the real `lbd` + a real `python3 -m http.server`
+backend): a real 200 KB file was fetched through the VIP from the client
+namespace with matching `md5sum` on both ends (the proxy didn't corrupt
+anything); the next `lbsync` tick wrote a `device_traffic_stats` row with
+`bytes_in=200205`/`bytes_out=89` (file + HTTP headers vs. a small GET) for
+the correct `device_id`/`backend_group_id`; a second fetch produced a
+second, independent row that `GET /api/devices/{id}/traffic` correctly
+summed (`bytes_in=400410`/`bytes_out=178`); and a fetch from a second
+client IP with no matching `devices` row produced no new row and no error
+in `cmd/api`'s log, confirming the "skip unmatched" behavior end-to-end.
+
+**GPU metrics:** `internal/hostmetrics` gained a `gpuSampler` that shells
+out to `nvidia-smi` once available (cached after the first
+`exec.LookPath` check) and averages `utilization.gpu`/`utilization.memory`
+across however many GPUs are present. When `nvidia-smi` isn't on `PATH` or
+the command fails, both fields come back as a Go `nil`, which the
+`gpu_percent`/`gpu_mem_percent` columns (nullable on both `system_metrics`
+and `backend_metrics`) and the JSON API (`omitempty`) all preserve as a
+real "no GPU," never a fabricated `0`. Both `internal/metrics` (the
+gateway's own "Server" card) and `cmd/backendagentd` (unchanged — it
+already forwards the whole `hostmetrics.Sample` struct) pick this up
+automatically.
+
+**Verified for real, honestly, given no GPU hardware exists in this
+environment** (confirmed absent: no `nvidia-smi`, no `/dev/nvidia*`, no
+`lspci` output for a GPU): a live `cmd/api` + Postgres round-trip through
+`GET /api/metrics/self` confirmed `gpu_percent`/`gpu_mem_percent` are
+absent from the JSON response entirely, matching the "not a fake zero"
+design. The CSV-parsing path itself (which can't be exercised by real
+hardware here) was tested against a **real subprocess** — a fake
+`nvidia-smi` shell script placed on `PATH` returning two GPUs' worth of
+canned utilization figures — rather than mocking `exec.Command` away, so
+the actual flag/format assumptions are what's under test
+(`internal/hostmetrics/gpu_test.go`). The genuinely-GPU-present path still
+needs validation against real NVIDIA hardware before relying on it in
+production.
+
 ## Local development (no Docker)
 
 ```bash

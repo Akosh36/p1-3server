@@ -14,9 +14,9 @@ import (
 func (s *Server) handleSelfMetrics(w http.ResponseWriter, r *http.Request) {
 	var m models.SystemMetric
 	err := s.pool.QueryRow(r.Context(), `
-		SELECT time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent
+		SELECT time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent, gpu_percent, gpu_mem_percent
 		FROM system_metrics ORDER BY time DESC LIMIT 1
-	`).Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps, &m.DiskPercent)
+	`).Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps, &m.DiskPercent, &m.GPUPercent, &m.GPUMemPercent)
 	if err != nil {
 		writeJSON(w, http.StatusOK, nil) // no sample collected yet
 		return
@@ -36,7 +36,7 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent
+		SELECT time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, disk_percent, gpu_percent, gpu_mem_percent
 		FROM system_metrics ORDER BY time DESC LIMIT $1
 	`, limit)
 	if err != nil {
@@ -48,7 +48,7 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	history := []models.SystemMetric{}
 	for rows.Next() {
 		var m models.SystemMetric
-		if err := rows.Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps, &m.DiskPercent); err != nil {
+		if err := rows.Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps, &m.DiskPercent, &m.GPUPercent, &m.GPUMemPercent); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read metrics row")
 			return
 		}
@@ -77,7 +77,7 @@ func (s *Server) handleBackendMetricsHistory(w http.ResponseWriter, r *http.Requ
 	}
 
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT time, cpu_percent, mem_percent, disk_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps
+		SELECT time, cpu_percent, mem_percent, disk_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, gpu_percent, gpu_mem_percent
 		FROM backend_metrics WHERE backend_server_id = $1 ORDER BY time DESC LIMIT $2
 	`, id, limit)
 	if err != nil {
@@ -89,7 +89,7 @@ func (s *Server) handleBackendMetricsHistory(w http.ResponseWriter, r *http.Requ
 	history := []models.BackendMetric{}
 	for rows.Next() {
 		var m models.BackendMetric
-		if err := rows.Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps); err != nil {
+		if err := rows.Scan(&m.Time, &m.CPUPercent, &m.MemPercent, &m.DiskPercent, &m.DiskReadBps, &m.DiskWriteBps, &m.NetInBps, &m.NetOutBps, &m.GPUPercent, &m.GPUMemPercent); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read backend metrics row")
 			return
 		}

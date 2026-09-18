@@ -17,15 +17,19 @@ import (
 
 // Sample is one point-in-time reading. Disk/network fields are rates
 // (bytes/sec), not cumulative counters, computed by Sampler from two
-// successive readings.
+// successive readings. GPUPercent/GPUMemPercent are pointers because most
+// hosts have no GPU at all: nil means "no GPU detected," never a fake 0,
+// so it stays distinguishable from a real, idle GPU.
 type Sample struct {
-	CPUPercent   float64 `json:"cpu_percent"`
-	MemPercent   float64 `json:"mem_percent"`
-	DiskPercent  float64 `json:"disk_percent"`
-	DiskReadBps  int64   `json:"disk_read_bps"`
-	DiskWriteBps int64   `json:"disk_write_bps"`
-	NetInBps     int64   `json:"net_in_bps"`
-	NetOutBps    int64   `json:"net_out_bps"`
+	CPUPercent    float64  `json:"cpu_percent"`
+	MemPercent    float64  `json:"mem_percent"`
+	DiskPercent   float64  `json:"disk_percent"`
+	DiskReadBps   int64    `json:"disk_read_bps"`
+	DiskWriteBps  int64    `json:"disk_write_bps"`
+	NetInBps      int64    `json:"net_in_bps"`
+	NetOutBps     int64    `json:"net_out_bps"`
+	GPUPercent    *float64 `json:"gpu_percent,omitempty"`
+	GPUMemPercent *float64 `json:"gpu_mem_percent,omitempty"`
 }
 
 // Sampler turns gopsutil's cumulative disk/network counters into
@@ -36,6 +40,7 @@ type Sampler struct {
 	lastDiskRead, lastDiskWrite uint64
 	lastSampleAt                time.Time
 	haveBaseline                bool
+	gpu                         gpuSampler
 }
 
 func NewSampler() *Sampler {
@@ -53,6 +58,7 @@ func (s *Sampler) Sample(now time.Time) (sample Sample, ok bool) {
 		elapsed := now.Sub(s.lastSampleAt).Seconds()
 		if elapsed > 0 {
 			sample = collectOne(elapsed, s.lastNetIn, s.lastNetOut, netIn, netOut, s.lastDiskRead, s.lastDiskWrite, diskRead, diskWrite)
+			sample.GPUPercent, sample.GPUMemPercent = s.gpu.sample()
 			ok = true
 		}
 	}

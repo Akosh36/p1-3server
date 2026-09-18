@@ -30,7 +30,7 @@ export default function ServerPage() {
         Server (Load Balancer / Gateway hosti)
       </h1>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <StatTile label="CPU" value={latest ? `${latest.cpu_percent.toFixed(1)}%` : '—'} />
         <StatTile label="RAM" value={latest ? `${latest.mem_percent.toFixed(1)}%` : '—'} />
         <StatTile label="Disk" value={latest ? `${latest.disk_percent.toFixed(1)}%` : '—'} />
@@ -38,6 +38,11 @@ export default function ServerPage() {
           label="Tarmoq"
           value={latest ? `${fmtBytes(latest.net_in_bps)} ↓` : '—'}
           hint={latest ? `${fmtBytes(latest.net_out_bps)} ↑` : undefined}
+        />
+        <StatTile
+          label="GPU"
+          value={latest?.gpu_percent != null ? `${latest.gpu_percent.toFixed(1)}%` : 'Mavjud emas'}
+          hint={latest?.gpu_mem_percent != null ? `Xotira: ${latest.gpu_mem_percent.toFixed(1)}%` : undefined}
         />
       </div>
 

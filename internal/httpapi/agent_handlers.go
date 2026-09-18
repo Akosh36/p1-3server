@@ -36,9 +36,9 @@ func (s *Server) handleAgentMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO backend_metrics (backend_server_id, cpu_percent, mem_percent, disk_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, backendID, sample.CPUPercent, sample.MemPercent, sample.DiskPercent, sample.DiskReadBps, sample.DiskWriteBps, sample.NetInBps, sample.NetOutBps)
+		INSERT INTO backend_metrics (backend_server_id, cpu_percent, mem_percent, disk_percent, disk_read_bps, disk_write_bps, net_in_bps, net_out_bps, gpu_percent, gpu_mem_percent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, backendID, sample.CPUPercent, sample.MemPercent, sample.DiskPercent, sample.DiskReadBps, sample.DiskWriteBps, sample.NetInBps, sample.NetOutBps, sample.GPUPercent, sample.GPUMemPercent)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record metric")
 		return

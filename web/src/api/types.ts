@@ -78,6 +78,8 @@ export interface BackendMetric {
   disk_write_bps: number
   net_in_bps: number
   net_out_bps: number
+  gpu_percent?: number
+  gpu_mem_percent?: number
 }
 
 export interface ServerGroup {
@@ -102,6 +104,8 @@ export interface SystemMetric {
   net_in_bps: number
   net_out_bps: number
   disk_percent: number
+  gpu_percent?: number
+  gpu_mem_percent?: number
 }
 
 export interface FirewallStatus {
@@ -120,6 +124,16 @@ export interface AuditLog {
   target_id?: number
   details?: Record<string, unknown>
   created_at: string
+}
+
+export interface DeviceGroupTraffic {
+  group_id: number
+  group_nickname: string
+  vip_address: string
+  vip_port: number
+  bytes_in: number
+  bytes_out: number
+  last_activity_at?: string
 }
 
 export type CaptureStatus = 'recording' | 'rotated' | 'downloaded' | 'error' | 'stopped'

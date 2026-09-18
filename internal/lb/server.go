@@ -51,6 +51,10 @@ func ServeControl(m *Manager, socketPath string) (*http.Server, error) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(m.Status())
 	})
+	mux.HandleFunc("/traffic", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TrafficResponse{Entries: m.DrainTraffic()})
+	})
 
 	server := &http.Server{Handler: mux}
 	go server.Serve(listener)

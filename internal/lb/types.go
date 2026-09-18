@@ -63,3 +63,19 @@ type GroupStatus struct {
 type Status struct {
 	Groups []GroupStatus `json:"groups"`
 }
+
+// ClientTraffic is one client IP's accumulated byte counts through one
+// group's VIP since the last drain. lbd knows neither which Postgres
+// device a client IP belongs to nor which server_groups row a VIP
+// address maps to — internal/lbsync resolves both when it polls
+// GET /traffic and attributes the bytes into device_traffic_stats.
+type ClientTraffic struct {
+	VIPAddress string `json:"vip_address"`
+	ClientIP   string `json:"client_ip"`
+	BytesUp    int64  `json:"bytes_up"`   // client -> backend (request/upload)
+	BytesDown  int64  `json:"bytes_down"` // backend -> client (response/download)
+}
+
+type TrafficResponse struct {
+	Entries []ClientTraffic `json:"entries"`
+}

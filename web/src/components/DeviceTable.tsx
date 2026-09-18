@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import type { AccessRole, Device, TrafficCapture } from '../api/types'
+import { Fragment, useState } from 'react'
+import type { AccessRole, Device, DeviceGroupTraffic, TrafficCapture } from '../api/types'
 import { api } from '../api/client'
+import { usePolling } from '../hooks/usePolling'
 import { EmptyNote } from './Card'
 
 interface Props {
@@ -20,6 +21,64 @@ function fmtElapsed(startedAt: string) {
   return [h, m, s].map((v) => String(v).padStart(2, '0')).join(':')
 }
 
+function fmtBytesTotal(v: number) {
+  if (v > 1024 * 1024 * 1024) return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  if (v > 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`
+  if (v > 1024) return `${(v / 1024).toFixed(1)} KB`
+  return `${v} B`
+}
+
+// Which server groups this device has actually sent/received traffic
+// through, and how much — populated by internal/lbsync resolving lbd's raw
+// per-connection byte counts (Phase 8) against devices/server_groups. A
+// device with no rows here simply hasn't used any load-balanced service
+// yet, which is a normal state, not an error.
+function DeviceTrafficDetail({ deviceId, colSpan }: { deviceId: number; colSpan: number }) {
+  const { data: traffic } = usePolling(() => api.get<DeviceGroupTraffic[]>(`/devices/${deviceId}/traffic`), 10000)
+
+  return (
+    <tr style={{ borderTop: '1px solid var(--border)' }}>
+      <td colSpan={colSpan} className="py-3">
+        {!traffic || traffic.length === 0 ? (
+          <EmptyNote>Bu qurilma hali hech qaysi server guruhi orqali trafik yubormagan.</EmptyNote>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: 'var(--text-muted)' }} className="text-left">
+                <th className="pb-2 font-medium">Server guruhi</th>
+                <th className="pb-2 font-medium">Yuklab olingan (↓)</th>
+                <th className="pb-2 font-medium">Yuborilgan (↑)</th>
+                <th className="pb-2 font-medium">Oxirgi faollik</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traffic.map((t) => (
+                <tr key={t.group_id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td className="py-1 pr-2" style={{ color: 'var(--text)' }}>
+                    {t.group_nickname}
+                    <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
+                      ({t.vip_address}:{t.vip_port})
+                    </span>
+                  </td>
+                  <td className="py-1 pr-2" style={{ color: 'var(--text)' }}>
+                    {fmtBytesTotal(t.bytes_in)}
+                  </td>
+                  <td className="py-1 pr-2" style={{ color: 'var(--text)' }}>
+                    {fmtBytesTotal(t.bytes_out)}
+                  </td>
+                  <td className="py-1 pr-2" style={{ color: 'var(--text-muted)' }}>
+                    {t.last_activity_at ? new Date(t.last_activity_at).toLocaleString('uz-UZ') : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </td>
+    </tr>
+  )
+}
+
 // Shared table for the "Userlar" and "Adminlar" cards: both list devices
 // holding the given access_grants role (nickname, device name, IP, MAC),
 // let an admin rename a device or revoke its access, and — for users only —
@@ -30,6 +89,7 @@ function fmtElapsed(startedAt: string) {
 export default function DeviceTable({ devices, role, showCapture, captures, onChanged, onCaptureChanged }: Props) {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [nickname, setNickname] = useState('')
+  const [trafficId, setTrafficId] = useState<number | null>(null)
 
   const filtered = devices.filter((d) => d.access_role === role)
 
@@ -75,7 +135,8 @@ export default function DeviceTable({ devices, role, showCapture, captures, onCh
         {filtered.map((d) => {
           const activeCapture = captures?.find((c) => c.device_id === d.id && c.status === 'recording')
           return (
-          <tr key={d.id} style={{ borderTop: '1px solid var(--border)' }}>
+          <Fragment key={d.id}>
+          <tr style={{ borderTop: '1px solid var(--border)' }}>
             <td className="py-2 pr-2" style={{ color: 'var(--text)' }}>
               {editingId === d.id ? (
                 <input
@@ -146,6 +207,13 @@ export default function DeviceTable({ devices, role, showCapture, captures, onCh
                 )
               )}
               <button
+                onClick={() => setTrafficId(trafficId === d.id ? null : d.id)}
+                className="mr-2 px-2 py-1 rounded text-xs"
+                style={{ border: '1px solid var(--border)', color: 'var(--text)' }}
+              >
+                {trafficId === d.id ? 'Trafikni yopish' : 'Trafik'}
+              </button>
+              <button
                 onClick={() => revoke(d.id)}
                 className="px-2 py-1 rounded text-xs"
                 style={{ color: 'var(--danger)' }}
@@ -154,6 +222,8 @@ export default function DeviceTable({ devices, role, showCapture, captures, onCh
               </button>
             </td>
           </tr>
+          {trafficId === d.id && <DeviceTrafficDetail deviceId={d.id} colSpan={6} />}
+          </Fragment>
           )
         })}
       </tbody>

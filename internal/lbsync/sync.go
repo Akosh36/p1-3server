@@ -54,6 +54,19 @@ type statusResponse struct {
 	Groups []groupStatus `json:"groups"`
 }
 
+// clientTraffic mirrors internal/lb.ClientTraffic: one client IP's
+// accumulated byte counts through one group's VIP since the last drain.
+type clientTraffic struct {
+	VIPAddress string `json:"vip_address"`
+	ClientIP   string `json:"client_ip"`
+	BytesUp    int64  `json:"bytes_up"`
+	BytesDown  int64  `json:"bytes_down"`
+}
+
+type trafficResponse struct {
+	Entries []clientTraffic `json:"entries"`
+}
+
 // Run pushes the current server_groups/backend_servers to lbd and pulls its
 // health results back every interval, until ctx is cancelled. Same
 // resilience pattern as internal/discovery and internal/aclsync: if lbd
@@ -101,6 +114,19 @@ func tick(ctx context.Context, pool *pgxpool.Pool, client *http.Client) error {
 	if err := writeHealth(ctx, pool, status); err != nil {
 		return fmt.Errorf("write health: %w", err)
 	}
+
+	// Traffic accounting is best-effort and kept separate from the error
+	// path above: push+pull(status) succeeding already proves lbd is
+	// reachable, so a failure here (a transient write error, say) logs and
+	// moves on instead of re-triggering Run's "lbd unreachable" warning for
+	// an unrelated problem.
+	traffic, err := pullTraffic(ctx, client)
+	if err != nil {
+		slog.Warn("lbsync: failed to pull traffic from lbd", "error", err)
+	} else if err := writeTraffic(ctx, pool, traffic); err != nil {
+		slog.Warn("lbsync: failed to write device traffic", "error", err)
+	}
+
 	return nil
 }
 
@@ -213,6 +239,54 @@ func pull(ctx context.Context, client *http.Client) (statusResponse, error) {
 		return statusResponse{}, err
 	}
 	return status, nil
+}
+
+func pullTraffic(ctx context.Context, client *http.Client) (trafficResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://lbd/traffic", nil)
+	if err != nil {
+		return trafficResponse{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return trafficResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	var traffic trafficResponse
+	if err := json.NewDecoder(resp.Body).Decode(&traffic); err != nil {
+		return trafficResponse{}, err
+	}
+	return traffic, nil
+}
+
+// writeTraffic attributes each drained client-traffic entry to the device
+// and server group it came from, if they're both known to Postgres. lbd
+// only ever sees raw IP addresses — it has no idea which devices.id a
+// client IP maps to or which server_groups.id a VIP belongs to — so the
+// INSERT...SELECT below resolves both here and naturally drops any entry
+// that doesn't match a known device or group, rather than guessing or
+// fabricating an association.
+func writeTraffic(ctx context.Context, pool *pgxpool.Pool, t trafficResponse) error {
+	for _, entry := range t.Entries {
+		if entry.BytesUp == 0 && entry.BytesDown == 0 {
+			continue
+		}
+		// bytes_in/bytes_out are from the device's own perspective, same
+		// convention as system_metrics' net_in_bps/net_out_bps: what the
+		// backend sent back to the client (BytesDown) is what the device
+		// received (bytes_in); what the client sent upstream (BytesUp) is
+		// what the device sent out (bytes_out).
+		_, err := pool.Exec(ctx, `
+			INSERT INTO device_traffic_stats (device_id, backend_group_id, bytes_in, bytes_out)
+			SELECT d.id, sg.id, $3, $4
+			FROM devices d, server_groups sg
+			WHERE d.ip_address = $1::inet AND sg.vip_address = $2::inet
+		`, entry.ClientIP, entry.VIPAddress, entry.BytesDown, entry.BytesUp)
+		if err != nil {
+			return fmt.Errorf("client %s via vip %s: %w", entry.ClientIP, entry.VIPAddress, err)
+		}
+	}
+	return nil
 }
 
 func newUnixSocketClient(socketPath string) *http.Client {

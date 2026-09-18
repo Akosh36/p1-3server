@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,6 +33,19 @@ type Manager struct {
 
 	mu      sync.Mutex
 	running map[string]*runningGroup // key: Group.key() ("vip:port")
+
+	trafficMu sync.Mutex
+	traffic   map[trafficKey]*trafficCounter
+}
+
+type trafficKey struct {
+	vipAddress string
+	clientIP   string
+}
+
+type trafficCounter struct {
+	bytesUp   atomic.Int64
+	bytesDown atomic.Int64
 }
 
 // NewManager takes baseCtx separately from the ctx each Sync call receives:
@@ -42,7 +56,53 @@ type Manager struct {
 // that as the listener's lifetime context was a real bug caught by the
 // ip-netns test: the VIP listener closed itself right after every sync).
 func NewManager(iface string, baseCtx context.Context) *Manager {
-	return &Manager{iface: iface, baseCtx: baseCtx, running: make(map[string]*runningGroup)}
+	return &Manager{
+		iface:   iface,
+		baseCtx: baseCtx,
+		running: make(map[string]*runningGroup),
+		traffic: make(map[trafficKey]*trafficCounter),
+	}
+}
+
+// recordTraffic accumulates one finished connection's byte counts, keyed
+// by the VIP it came through and the client's IP — passed into every
+// listener started by startLocked as their trafficRecorder.
+func (m *Manager) recordTraffic(vipAddress, clientIP string, bytesUp, bytesDown int64) {
+	if bytesUp == 0 && bytesDown == 0 {
+		return
+	}
+	m.trafficMu.Lock()
+	defer m.trafficMu.Unlock()
+	key := trafficKey{vipAddress: vipAddress, clientIP: clientIP}
+	c, ok := m.traffic[key]
+	if !ok {
+		c = &trafficCounter{}
+		m.traffic[key] = c
+	}
+	c.bytesUp.Add(bytesUp)
+	c.bytesDown.Add(bytesDown)
+}
+
+// DrainTraffic returns every client's accumulated traffic since the last
+// call and resets the counters — internal/lbsync polls this on its normal
+// tick and is the only thing that ever sees a given byte count, so
+// draining (not just reading) here is what keeps the two in sync without
+// needing lbd to track "already reported" state itself.
+func (m *Manager) DrainTraffic() []ClientTraffic {
+	m.trafficMu.Lock()
+	defer m.trafficMu.Unlock()
+
+	entries := make([]ClientTraffic, 0, len(m.traffic))
+	for k, c := range m.traffic {
+		entries = append(entries, ClientTraffic{
+			VIPAddress: k.vipAddress,
+			ClientIP:   k.clientIP,
+			BytesUp:    c.bytesUp.Load(),
+			BytesDown:  c.bytesDown.Load(),
+		})
+	}
+	m.traffic = make(map[trafficKey]*trafficCounter)
+	return entries
 }
 
 // Sync reconciles the running listeners against the desired groups:
@@ -112,7 +172,7 @@ func (m *Manager) startLocked(opCtx context.Context, key string, g Group) error 
 	go runHealthChecks(healthCtx, poolPtr, healthCheckInterval)
 
 	listenerCtx, listenerCancel := context.WithCancel(m.baseCtx)
-	go runListener(listenerCtx, listener, g.vipAddr(), poolPtr)
+	go runListener(listenerCtx, listener, g.vipAddr(), g.VIPAddress, poolPtr, m.recordTraffic)
 	// One cancel tears down both the health-check loop and the listener;
 	// wrap so stopLocked only needs to call it once.
 	combinedCancel := func() {

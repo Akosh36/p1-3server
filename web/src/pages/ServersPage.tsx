@@ -129,6 +129,7 @@ function BackendDetail({ backend, onTokenChanged }: { backend: BackendServer; on
     .slice()
     .reverse()
     .map((m) => ({ ...m, timeLabel: fmtTime(m.time) }))
+  const latestGPU = chartData.length > 0 ? chartData[chartData.length - 1] : null
 
   async function copyToken() {
     if (!backend.agent_token) return
@@ -174,6 +175,14 @@ function BackendDetail({ backend, onTokenChanged }: { backend: BackendServer; on
           <button onClick={regenerateToken} disabled={regenerating} className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {regenerating ? 'Yaratilmoqda...' : 'Tokenni yangilash'}
           </button>
+          {latestGPU && (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              GPU:{' '}
+              {latestGPU.gpu_percent != null
+                ? `${latestGPU.gpu_percent.toFixed(1)}% (xotira ${latestGPU.gpu_mem_percent?.toFixed(1) ?? '—'}%)`
+                : 'mavjud emas'}
+            </span>
+          )}
         </div>
 
         {chartData.length < 2 ? (

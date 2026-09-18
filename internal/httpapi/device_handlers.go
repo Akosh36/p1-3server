@@ -110,6 +110,47 @@ func (s *Server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// handleDeviceTraffic returns this device's all-time traffic, broken down by
+// which server group it went through — internal/lbsync is what populates
+// device_traffic_stats (Phase 8), by resolving lbd's raw client-IP/VIP byte
+// counts against devices/server_groups; this just aggregates what's
+// already there. A device that has never sent traffic through a VIP
+// (e.g. it isn't a "user" of any load-balanced service) returns an empty
+// list, not an error.
+func (s *Server) handleDeviceTraffic(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid device id")
+		return
+	}
+
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT sg.id, sg.nickname, host(sg.vip_address), sg.vip_port,
+		       SUM(dts.bytes_in), SUM(dts.bytes_out), MAX(dts.time)
+		FROM device_traffic_stats dts
+		JOIN server_groups sg ON sg.id = dts.backend_group_id
+		WHERE dts.device_id = $1
+		GROUP BY sg.id, sg.nickname, sg.vip_address, sg.vip_port
+		ORDER BY SUM(dts.bytes_in) + SUM(dts.bytes_out) DESC
+	`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load device traffic")
+		return
+	}
+	defer rows.Close()
+
+	summaries := []models.DeviceGroupTraffic{}
+	for rows.Next() {
+		var t models.DeviceGroupTraffic
+		if err := rows.Scan(&t.GroupID, &t.GroupNickname, &t.VIPAddress, &t.VIPPort, &t.BytesIn, &t.BytesOut, &t.LastActivityAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read device traffic row")
+			return
+		}
+		summaries = append(summaries, t)
+	}
+	writeJSON(w, http.StatusOK, summaries)
+}
+
 func (s *Server) handleListSwitchPorts(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, switch_name, port_number, label, vlan, link_status, last_change_at

@@ -207,7 +207,9 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 `internal/db/migrations/0001_init.up.sql` — barcha jadvallar (Phase 5'da
 `0002_backend_metrics.up.sql` bilan `backend_servers.agent_token` va
 `backend_metrics` jadvali, Phase 6'da `0003_capture_stopped.up.sql` bilan
-`capture_status`ga `'stopped'` qiymati qo'shildi, quyida ko'rsatilgan):
+`capture_status`ga `'stopped'` qiymati, Phase 8'da `0004_gpu_metrics.up.sql`
+bilan `system_metrics`/`backend_metrics`ga `gpu_percent`/`gpu_mem_percent`
+(ikkalasi ham `NULL`ga ruxsat beriladigan) qo'shildi, quyida ko'rsatilgan):
 
 ```
 admins(id, username, password_hash, totp_secret, role[super_admin|admin],
@@ -250,11 +252,17 @@ audit_logs(id, actor_admin_id, action, target_type, target_id, details JSONB, cr
 
 -- Vaqt-qatori (TimescaleDB hypertable'ga aylantirilishi mumkin, hozircha oddiy jadval):
 system_metrics(time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps,
-                net_in_bps, net_out_bps, disk_percent)
+                net_in_bps, net_out_bps, disk_percent, gpu_percent, gpu_mem_percent)
 device_traffic_stats(time, device_id, backend_group_id, bytes_in, bytes_out)
+  -- Phase 0'dan beri sxemada bor edi, Phase 8'da birinchi marta yozildi:
+  -- internal/lbsync.writeTraffic lbd'ning GET /traffic'idan kelgan client
+  -- IP/VIP juftlarini devices/server_groups'ga moslab shu yerga yozadi
 backend_metrics(time, backend_server_id, cpu_percent, mem_percent, disk_percent,
-                 disk_read_bps, disk_write_bps, net_in_bps, net_out_bps)
-  -- Phase 5: cmd/backendagentd'dan /api/agent/metrics orqali push qilinadi
+                 disk_read_bps, disk_write_bps, net_in_bps, net_out_bps,
+                 gpu_percent, gpu_mem_percent)
+  -- Phase 5: cmd/backendagentd'dan /api/agent/metrics orqali push qilinadi;
+  -- gpu_percent/gpu_mem_percent Phase 8'da qo'shildi (ikkalasi ham NULL —
+  -- GPU topilmasa, hech qachon soxta 0 emas)
 ```
 
 Migratsiyalar `internal/db/migrate.go` orqali **avtomatik** ishga tushadi
@@ -283,7 +291,8 @@ internal/
   auth/                   JWT, bcrypt, TOTP
   httpapi/                HTTP handlerlar, middleware, router (chi)
   hostmetrics/            CPU/RAM/Disk/Net sampler (gopsutil) — internal/metrics VA
-                           cmd/backendagentd ikkalasi ham shu yerdan foydalanadi
+                           cmd/backendagentd ikkalasi ham shu yerdan foydalanadi;
+                           gpu.go (Phase 8) — nvidia-smi asosida GPU foizi, topilmasa nil
   metrics/                Gateway'ning o'z host metrikasini yig'uvchi (hostmetrics ustida)
   netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
                            store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
@@ -298,7 +307,9 @@ internal/
                            io.Copy), manager.go (VIP'lar bo'yicha reconcile + Sync/Status),
                            server.go (Unix-socket: /sync, /status)
   lbsync/                 API tomonida: server_groups/backend_servers'ni Postgres'dan o'qib
-                           lbd'ga push qiluvchi, sog'liqni orqaga yozuvchi
+                           lbd'ga push qiluvchi, sog'liqni orqaga yozuvchi; pullTraffic/
+                           writeTraffic (Phase 8) — GET /traffic'ni tortib device_traffic_stats'ga
+                           device_id/backend_group_id'ni hal qilib yozuvchi
   capd/                   capd: types.go (Start/Stop/Status wire tiplari), validate.go
                            (MAC/yo'l tekshiruvi), manager.go (tcpdump jarayon boshqaruvi —
                            Start/Stop/Status/StopAll, bitta cmd.Wait() qoidasi bilan),
@@ -913,11 +924,149 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   ko'rsatmaydi (bu `capd`ning hujjatlashtirilgan qamrovi — faqat LAN
   qurilmalari, masofaviy-VPN emas).
 
+### ✅ Phase 8 — tayyor va real sinaldi (backend trafik hisobi + GPU metrikasi, `ip netns` + haqiqiy Postgres/API bilan)
+
+Bu bosqich alohida "Phase" sifatida rejalashtirilmagan edi — loyihani spec'ga
+qarshi to'liq qayta tekshirish (bo'lim 2.3 jadvalidagi barcha qatorlarni
+tekshirish) natijasida topilgan **2 ta haqiqiy bo'shliqni** to'ldiradi:
+"Userga bosilganda qaysi serverga qancha trafik ishlatayotgani" (2.3-band,
+Userlar sahifasi) va "Server" kartasidagi **GPU** ustuni (bo'lim 1'da aniq
+so'ralgan, lekin hech qachon amalga oshirilmagan edi).
+
+**1) Har bir qurilmaning backend-trafik hisobi:**
+
+- **`internal/lb` (data-plane, lbd ichida) — haqiqiy bayt hisoblash:**
+  `proxy.go`ning `handleConn` funksiyasi ilgari ikkita `io.Copy`
+  yo'nalishini alohida ishga tushirib, ulardan birortasi tugashini kutmasdan
+  chiqib ketardi (yopilish deferred edi). Endi ikkalasi ham `atomic.Int64`
+  orqali o'z bayt sonini hisoblaydi, birinchisi tugagach **ikkala** soketni
+  yopadi (ikkinchisining bloklangan Read/Write'ini bo'shatish uchun), so'ng
+  **ikkinchisini ham** kutadi — shundagina ikkala yo'nalish bo'yicha yakuniy
+  son aniq bo'ladi. Har bir tugagan ulanish `Manager.recordTraffic(vip,
+  clientIP, bytesUp, bytesDown)` orqali `(vipAddress, clientIP)` bo'yicha
+  xotiradagi xaritaga qo'shiladi. Yangi `GET /traffic` endpoint'i
+  (`server.go`) `Manager.DrainTraffic()`ni chaqiradi — bu **o'qishda
+  tozalaydi** (drain-on-read): har bir so'rov o'shanga qadar yig'ilgan
+  hammasini qaytaradi va xaritani bo'shatadi, shunda `lbd` "allaqachon
+  yuborilgan" holatni o'zi kuzatib yurishga hojat qolmaydi.
+- **`internal/lbsync` (control-plane, yagona yozish joyi) — IP'larni
+  hal qilish:** har tsiklda (`push`/`pull status`dan keyin, alohida,
+  xatosi umumiy "lbd unreachable" ogohlantirishini qo'zg'atmaydigan holda)
+  `pullTraffic()` `GET /traffic`ni chaqiradi, so'ng `writeTraffic()` har
+  bir yozuv uchun bitta `INSERT ... SELECT ... FROM devices d, server_groups
+  sg WHERE d.ip_address = $1::inet AND sg.vip_address = $2::inet` ishlatadi.
+  `lbd` client IP'ning qaysi `devices.id`ga yoki VIP'ning qaysi
+  `server_groups.id`ga tegishli ekanini bilmaydi — shu SELECT ikkalasini
+  ham Postgres'da hal qiladi va **moslik topilmagan yozuvni jimgina
+  tashlab yuboradi** (soxta bog'lanish taxmin qilmasdan). Yo'nalish
+  konventsiyasi `system_metrics.net_in_bps`/`net_out_bps`nikiga mos:
+  `bytes_in` = qurilma **qabul qilgani** (backend → client, ya'ni
+  `BytesDown`), `bytes_out` = qurilma **yuborgani** (client → backend,
+  ya'ni `BytesUp`).
+- **Yangi endpoint — `GET /api/devices/{id}/traffic`:** `device_traffic_stats`
+  jadvalini (Phase 0'dan beri sxemada bor, hech qachon ishlatilmagan edi)
+  `server_groups` bilan `JOIN` qilib, guruh bo'yicha `SUM(bytes_in)`,
+  `SUM(bytes_out)`, `MAX(time)` qaytaradi — Userlar sahifasining "qaysi
+  serverga qancha trafik" savoliga to'g'ridan-to'g'ri javob.
+- **Frontend — `DeviceTable.tsx`:** har bir qator uchun "Trafik" tugmasi
+  qo'shildi (Servers sahifasidagi "Metrikalar" tugmasi bilan bir xil
+  kengaytiriladigan-qator naqshi); bosilganda `DeviceTrafficDetail`
+  10 soniyada bir marta so'rov yuborib, har bir server guruhi bo'yicha
+  yuklab olingan/yuborilgan trafik va oxirgi faollik vaqtini jadval
+  ko'rinishida ko'rsatadi. Hech qanday trafik bo'lmasa — "hali trafik
+  yubormagan" degan halol xabar, xato emas.
+- **To'liq real end-to-end sinov (`ip netns` bilan izolyatsiya qilingan
+  ikkita namespace + haqiqiy Postgres + haqiqiy `cmd/api`/`lbd`):**
+  1. `lbtest-gw` (VIP + lbd + backend HTTP server) va `lbtest-cli`
+     (mijoz) namespace'lari veth juftligi bilan bog'landi
+     (`10.55.0.1` ↔ `10.55.0.2`).
+  2. Haqiqiy Postgres'ga test `device` (`ip_address=10.55.0.2`),
+     `server_groups` (`vip_address=10.55.0.9:9000`) va `backend_servers`
+     (`127.0.0.1:9000`) qatorlari qo'shildi.
+  3. Haqiqiy `cmd/lbd` `lbtest-gw` namespace'ida, haqiqiy `cmd/api`
+     (o'z ichida `lbsync.Run`) asosiy namespace'da ishga tushirildi;
+     `lbd` VIP'ni haqiqiy `ip addr add` bilan qo'shganini log'dan va
+     `ip addr show`dan tasdiqladim.
+  4. `lbtest-cli`dan **haqiqiy 200 000 baytli fayl** VIP orqali
+     `curl` bilan yuklab olindi — mijozdagi va serverdagi fayllarning
+     `md5sum`i **bir xil** chiqdi (proxy ma'lumotni buzmadi).
+  5. Keyingi `lbsync` tsiklidan so'ng `device_traffic_stats`da **aynan**
+     kutilgan qator paydo bo'ldi: `device_id=<test qurilma>`,
+     `backend_group_id=<test guruh>`, `bytes_in=200205` (fayl + HTTP
+     sarlavhalar), `bytes_out=89` (kichik GET so'rovi).
+  6. Ikkinchi yuklab olishdan keyin ikkinchi (alohida, append-only)
+     qator qo'shildi; `GET /api/devices/{id}/traffic` ikkalasini
+     to'g'ri `SUM`ladi: `bytes_in=400410`, `bytes_out=178`.
+  7. **Moslik topilmagan IP sinovi:** `veth-cli`ga ikkinchi manzil
+     (`10.55.0.3`, hech qanday `devices` qatoriga bog'lanmagan)
+     qo'shilib, o'sha manzildan alohida yuklab olindi — `lbsync` xato
+     bermadi, hech qanday yangi qator yozmadi (yozuv jimgina
+     tashlab yuborildi, aynan mo'ljallanganidek).
+  8. Sinovdan keyin barcha namespace/process/test-qatorlar tozalandi;
+     `backend_servers`dagi eski (Phase 4'dan qolgan) `10.0.0.5:8080`
+     yozuvi `lbd`ning haqiqiy health-check urinishi natijasida
+     `is_healthy=false`, haqiqiy `last_check_at` bilan yangilandi — bu
+     soxta emas, chindan ham tekshirilgan holatni aks ettiradi.
+
+**2) GPU metrikasi (`internal/hostmetrics`):**
+
+- **`gpu.go` — faqat NVIDIA, faqat haqiqiy o'qish:** `gpuSampler` birinchi
+  chaqiruvda `exec.LookPath("nvidia-smi")` bilan mavjudligini **bir marta**
+  tekshiradi va keshlaydi (har tsiklda qayta qidirmaslik uchun). Topilsa,
+  `nvidia-smi --query-gpu=utilization.gpu,utilization.memory
+  --format=csv,noheader,nounits`ni chaqiradi va (bir nechta GPU bo'lsa)
+  o'rtachasini oladi. Topilmasa yoki buyruq xato bersa — **`nil, nil`
+  qaytaradi, hech qachon soxta `0` emas**, shunda "GPU yo'q" va "GPU bor,
+  lekin bo'sh turibdi (0%)" holatlari bir-biridan farqlanadi.
+- **Sxema:** `0004_gpu_metrics.up.sql` — `system_metrics` va
+  `backend_metrics`ga `gpu_percent`/`gpu_mem_percent` (ikkalasi ham
+  `NUMERIC`, `NULL`ga ruxsat beriladigan) ustunlar qo'shdi.
+- **Ulash:** `internal/metrics/collector.go` (gateway'ning o'zi) va
+  `internal/httpapi/agent_handlers.go` (Phase 5'dagi `backendagentd`
+  push'i) ikkalasi ham endi `hostmetrics.Sample`ning yangi
+  `GPUPercent`/`GPUMemPercent` (`*float64`, JSON'da `omitempty`)
+  maydonlarini bazaga yozadi — `cmd/backendagentd` o'zgarishsiz qoldi,
+  chunki u butun `Sample` struct'ini marshal qilib yuboradi.
+- **Frontend:** `ServerPage.tsx`ning stat panjarasiga 5-chi "GPU" plitkasi
+  qo'shildi (`gpu_percent == null` bo'lsa "Mavjud emas" ko'rsatadi, aks
+  holda foiz + xotira foizi). `ServersPage.tsx`ning `BackendDetail`
+  qatoriga (Phase 5'da qo'shilgan backend metrikasi paneli) token qatori
+  yoniga kichik "GPU: X% (xotira Y%)" yoki "GPU: mavjud emas" matni
+  qo'shildi — mavjud 3 ta validatsiya qilingan grafik rangidan (CPU/RAM/
+  Disk uchun band) tashqari to'rtinchi chiziq **qo'shilmadi**, chunki
+  loyihada rasman faqat 3 ta CVD-xavfsiz rang tasdiqlangan.
+- **Sinov — bu sandbox'da GPU apparati yo'qligi oldindan tasdiqlangan
+  (`nvidia-smi`, `/dev/nvidia*`, `lspci` — hech biri yo'q), shuning
+  uchun faqat "GPU yo'q" yo'lini **haqiqatan** sinash mumkin edi:**
+  1. `internal/hostmetrics/gpu_test.go`: `TestGPUSampler_NoNvidiaSMI` —
+     PATH'da `nvidia-smi` yo'qligida `nil, nil` qaytarishini tasdiqlaydi
+     (aynan shu sandbox'ning haqiqiy holati).
+  2. `TestGPUSampler_ParsesRealNvidiaSMIOutput` — `exec.Command`ning
+     o'zini **mock qilmasdan**, PATH'ga haqiqiy (soxta ma'lumot
+     qaytaradigan, lekin haqiqiy ishga tushiriladigan) `nvidia-smi`
+     shell skripti qo'yib, real subprocess orqali CSV tahlil mantig'ini
+     sinaydi (2 ta "GPU" — 23/77% va 40/60% — to'g'ri o'rtachalanib
+     50%/50% chiqishini tasdiqladi).
+  3. `TestGPUSampler_CachesAvailability` — mavjudlik tekshiruvi bir
+     marta keshlanishini tasdiqlaydi.
+  4. Haqiqiy `cmd/api` + Postgres ishga tushirilgan holda
+     `GET /api/metrics/self`ga so'rov yuborilib, `gpu_percent`/
+     `gpu_mem_percent` maydonlari javobda **umuman yo'qligi**
+     (`omitempty`, chunki `nil`) tasdiqlandi — soxta `0` emas, chin
+     "aniqlanmadi" holati butun zanjir bo'ylab (sampler → DB → API
+     javobi) saqlanib qolganini ko'rsatadi.
+- **Bilingan cheklov:** GPU **mavjud** bo'lgan yo'l (haqiqiy `nvidia-smi`
+  chiqishi bilan) faqat soxta skript orqali, mantiqiy jihatdan sinaldi —
+  bu sandbox'da haqiqiy NVIDIA GPU yo'qligi sababli haqiqiy apparat bilan
+  hali tekshirilmagan. Ishlab chiqarish muhitida GPU'li backend bo'lsa,
+  birinchi navbatda shu yo'lni haqiqiy `nvidia-smi` bilan tasdiqlash kerak.
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
+| Phase 9 | LAN sahifasida wired/wireless_local tarmoqlarini avtomatik yaratish (`netdiscd`dan) + port/LAN bosilganda qurilmalarni filtrlash (drill-down) — qayta ko'rib chiqishda topilgan 3- va 4-bo'shliqlar | — |
+| Phase 10 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
 ---
 
@@ -1010,30 +1159,36 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 ## 12. Keyingi qadam
 
 Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
-Phase 4 (`lbd`), Phase 5 (`backendagentd`), Phase 6 (`capd`) va Phase 7
-(`wgd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Bo'lim 2.3'dagi "Har
-bir bo'lim uchun talablar" jadvalidagi **barcha qatorlar** endi haqiqiy,
-ishlaydigan funksionallik bilan qoplangan: bu server to'liq ishlaydigan
-LAN gateway, load balancer, trafik yozib oluvchi tizim **va** site-to-site
-VPN — DHCP beradi, kirish huquqini nazorat qiladi, ruxsat berilganlarni
-internetga NAT bilan chiqaradi, `lan_forward`dagi ruxsat berilgan
-trafikni haqiqiy VIP'lar orqali orqadagi serverlarga taqsimlaydi, har bir
-backend serverning o'z host metrikasi ko'rinadi, admin istalgan userning
-trafigini on-demand pcap sifatida yozib Wireshark'da tekshira oladi, va
-endi masofadagi ikkinchi LAN tarmog'i haqiqiy, shifrlangan WireGuard
-tuneli orqali bog'lanib, LAN sahifasida Active/Deactive qilinadi va
-real-vaqtda reachability'i ko'rinadi.
+Phase 4 (`lbd`), Phase 5 (`backendagentd`), Phase 6 (`capd`), Phase 7
+(`wgd`) va Phase 8 (backend trafik hisobi + GPU metrikasi) tayyor va real
+sinaldi — bo'lim 8'ga qarang. Bo'lim 2.3'dagi "Har bir bo'lim uchun
+talablar" jadvalidagi **barcha qatorlar** endi haqiqiy, ishlaydigan
+funksionallik bilan qoplangan: bu server to'liq ishlaydigan LAN gateway,
+load balancer, trafik yozib oluvchi tizim **va** site-to-site VPN — DHCP
+beradi, kirish huquqini nazorat qiladi, ruxsat berilganlarni internetga
+NAT bilan chiqaradi, `lan_forward`dagi ruxsat berilgan trafikni haqiqiy
+VIP'lar orqali orqadagi serverlarga taqsimlaydi (va har bir userning
+qaysi serverga qancha trafik ishlatganini hisoblaydi), har bir backend
+serverning o'z host metrikasi (CPU/RAM/Disk/tarmoq **va GPU**, mavjud
+bo'lsa) ko'rinadi, admin istalgan userning trafigini on-demand pcap
+sifatida yozib Wireshark'da tekshira oladi, va masofadagi ikkinchi LAN
+tarmog'i haqiqiy, shifrlangan WireGuard tuneli orqali bog'lanib, LAN
+sahifasida Active/Deactive qilinadi va real-vaqtda reachability'i
+ko'rinadi.
 
-Navbatdagi ish — **Phase 8: RBAC'ning API bo'ylab to'liq qo'llanilishi,
-xavfsizlik audit, dizayn siyqallashtirish** — bu endi yangi tarmoq
-funksiyasi emas, balki mavjud 7 bosqichni qattiqlashtirish bosqichi:
-har bir endpoint'ning `requireAuth`/`requireSuperAdmin` qo'llanilishini
-qayta ko'rib chiqish, xavfsizlik zaifliklarini qidirish (masalan admin
-JWT muddati, parol siyosati, audit log to'liqligi), va 7 bosqich
-davomida to'planib qolgan kichik UI/UX nomutanosibliklarni tekshirish.
-Bu boshqa bosqichlardan farqli — aniq bitta yangi daemon yoki funksiya
-emas, shuning uchun boshlashdan oldin foydalanuvchidan aniq qamrov
-so'rash kerak bo'ladi (masalan: "audit" nimani anglatadi — kod
-review'mi, avtomatlashtirilgan xavfsizlik skaneri, yoki muayyan
-zaifliklarni qidirishmi). Har bosqich tugagach ushbu faylni va
-`README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.
+Navbatdagi ish — **Phase 9: LAN sahifasida wired/wireless_local
+tarmoqlarini avtomatik yaratish + port/LAN bosilganda qurilmalarni
+filtrlash (drill-down)** — bo'lim 8'dagi Phase 9 qatoriga qarang. Undan
+keyin **Phase 10: RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik
+audit, dizayn siyqallashtirish** — bu endi yangi tarmoq funksiyasi emas,
+balki mavjud bosqichlarni qattiqlashtirish bosqichi: har bir endpoint'ning
+`requireAuth`/`requireSuperAdmin` qo'llanilishini qayta ko'rib chiqish,
+xavfsizlik zaifliklarini qidirish (masalan admin JWT muddati, parol
+siyosati, audit log to'liqligi), va to'planib qolgan kichik UI/UX
+nomutanosibliklarni tekshirish. Bu boshqa bosqichlardan farqli — aniq
+bitta yangi daemon yoki funksiya emas, shuning uchun boshlashdan oldin
+foydalanuvchidan aniq qamrov so'rash kerak bo'ladi (masalan: "audit"
+nimani anglatadi — kod review'mi, avtomatlashtirilgan xavfsizlik
+skaneri, yoki muayyan zaifliklarni qidirishmi). Har bosqich tugagach
+ushbu faylni va `README.md`/`docs/deploy.md`ni yangilab borish tavsiya
+etiladi.

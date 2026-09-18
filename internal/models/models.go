@@ -154,14 +154,16 @@ type BackendServer struct {
 // running on a backend server (Phase 5) — CPU/RAM/disk/network, same shape
 // as SystemMetric but per-backend instead of for the gateway itself.
 type BackendMetric struct {
-	Time         time.Time `json:"time"`
-	CPUPercent   float64   `json:"cpu_percent"`
-	MemPercent   float64   `json:"mem_percent"`
-	DiskPercent  float64   `json:"disk_percent"`
-	DiskReadBps  int64     `json:"disk_read_bps"`
-	DiskWriteBps int64     `json:"disk_write_bps"`
-	NetInBps     int64     `json:"net_in_bps"`
-	NetOutBps    int64     `json:"net_out_bps"`
+	Time          time.Time `json:"time"`
+	CPUPercent    float64   `json:"cpu_percent"`
+	MemPercent    float64   `json:"mem_percent"`
+	DiskPercent   float64   `json:"disk_percent"`
+	DiskReadBps   int64     `json:"disk_read_bps"`
+	DiskWriteBps  int64     `json:"disk_write_bps"`
+	NetInBps      int64     `json:"net_in_bps"`
+	NetOutBps     int64     `json:"net_out_bps"`
+	GPUPercent    *float64  `json:"gpu_percent,omitempty"`
+	GPUMemPercent *float64  `json:"gpu_mem_percent,omitempty"`
 }
 
 type TrafficCapture struct {
@@ -189,14 +191,16 @@ type AuditLog struct {
 }
 
 type SystemMetric struct {
-	Time         time.Time `json:"time"`
-	CPUPercent   float64   `json:"cpu_percent"`
-	MemPercent   float64   `json:"mem_percent"`
-	DiskReadBps  int64     `json:"disk_read_bps"`
-	DiskWriteBps int64     `json:"disk_write_bps"`
-	NetInBps     int64     `json:"net_in_bps"`
-	NetOutBps    int64     `json:"net_out_bps"`
-	DiskPercent  float64   `json:"disk_percent"`
+	Time          time.Time `json:"time"`
+	CPUPercent    float64   `json:"cpu_percent"`
+	MemPercent    float64   `json:"mem_percent"`
+	DiskReadBps   int64     `json:"disk_read_bps"`
+	DiskWriteBps  int64     `json:"disk_write_bps"`
+	NetInBps      int64     `json:"net_in_bps"`
+	NetOutBps     int64     `json:"net_out_bps"`
+	DiskPercent   float64   `json:"disk_percent"`
+	GPUPercent    *float64  `json:"gpu_percent,omitempty"`
+	GPUMemPercent *float64  `json:"gpu_mem_percent,omitempty"`
 }
 
 type DeviceTrafficStat struct {
@@ -205,4 +209,17 @@ type DeviceTrafficStat struct {
 	BackendGroupID *int64    `json:"backend_group_id,omitempty"`
 	BytesIn        int64     `json:"bytes_in"`
 	BytesOut       int64     `json:"bytes_out"`
+}
+
+// DeviceGroupTraffic is one device's all-time traffic total through one
+// server group, as reported by GET /api/devices/{id}/traffic — the Users
+// page's "which server is this user using, and how much" view.
+type DeviceGroupTraffic struct {
+	GroupID        int64      `json:"group_id"`
+	GroupNickname  string     `json:"group_nickname"`
+	VIPAddress     string     `json:"vip_address"`
+	VIPPort        int        `json:"vip_port"`
+	BytesIn        int64      `json:"bytes_in"`
+	BytesOut       int64      `json:"bytes_out"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 }

@@ -33,7 +33,9 @@ kira olmaydi (default-deny).
 | Phase 5 | `backendagentd` — backend serverlar metrikasi (push-agent) | ✅ Tayyor |
 | Phase 6 | `capd` — on-demand pcap yozib olish | ✅ Tayyor |
 | Phase 7 | `wgd` — site-to-site WireGuard (masofaviy Wireless LAN) | ✅ Tayyor |
-| Phase 8 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ⏳ Keyingi |
+| Phase 8 | Backend trafik hisobi (userga qarab) + GPU metrikasi | ✅ Tayyor |
+| Phase 9 | LAN avtomatik tarmoq yaratish + port/LAN drill-down | ⏳ Keyingi |
+| Phase 10 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ⏳ Keyingi |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
 fayli, SNMP (boshqariladigan switch) va hostapd (lokal WiFi) orqali avtomatik
@@ -125,6 +127,23 @@ zanjir (real Postgres → API → wgd → orqaga Postgres, LAN sahifasidagi
 "+ Masofaviy LAN qo'shish" formasi va Active/Deactive tugmasi bilan
 birga) haqiqiy brauzerda (Playwright) xatosiz tasdiqlandi.
 
+Loyihani spec'ga qarshi to'liq qayta tekshirish natijasida topilgan 2 ta
+bo'shliq endi to'ldirildi. Birinchisi — Userlar sahifasida har bir
+qurilmaning **qaysi server guruhiga qancha trafik yuborgani/undan qancha
+qabul qilgani**: `lbd` endi har bir TCP ulanishning ikkala yo'nalishdagi
+haqiqiy bayt sonini hisoblaydi va `GET /traffic` orqali (o'qishda
+tozalanadigan xarita sifatida) chiqaradi, `internal/lbsync` esa client
+IP'ni `devices`ga, VIP manzilni `server_groups`ga moslab
+`device_traffic_stats`ga yozadi (moslik topilmasa — jimgina o'tkazib
+yuboriladi, soxta bog'lanish yo'q). Userlar sahifasidagi yangi "Trafik"
+tugmasi shu ma'lumotni server guruhi bo'yicha ko'rsatadi. Ikkinchisi —
+"Server" va "Serverlar" sahifalaridagi **GPU** ko'rsatkichi: mavjud
+bo'lsa `nvidia-smi` orqali haqiqiy o'qiladi, bo'lmasa (bu loyihaning
+o'zi ishlab chiqilgan muhitdagi kabi) "Mavjud emas" deb ko'rsatiladi —
+hech qachon soxta `0%` emas. Ikkalasi ham haqiqiy `ip netns` topologiyasi
++ haqiqiy Postgres/`cmd/api`/`lbd` bilan uchtan-uchgacha sinaldi (200 KB
+haqiqiy fayl VIP orqali uzatildi, bazaga tushgan bayt soni tekshirildi).
+
 ## Loyiha tuzilmasi
 
 ```
@@ -143,14 +162,15 @@ internal/
   auth/                JWT, bcrypt, TOTP
   httpapi/             HTTP handlerlar, middleware, router
   hostmetrics/          CPU/RAM/Disk/Net sampler (gopsutil) — metrics VA backendagentd
-                        ikkalasi ham shu yerdan foydalanadi
+                        ikkalasi ham shu yerdan foydalanadi; gpu.go — nvidia-smi
+                        asosida GPU foizi, topilmasa nil (soxta 0 emas)
   metrics/             Gateway'ning o'z host metrikasini yig'uvchi (hostmetrics ustida)
   netdisc/              netdiscd'ning kollektorlari (ARP/dnsmasq/SNMP/hostapd) + Unix-socket server
   discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash
   firewall/             fwctl'ning nftables ruleset generator/apply/manager/socket serveri
   aclsync/               API tomonida access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
   lb/                  lbd'ning VIP/proksi/health-check/manager + Unix-socket serveri
-  lbsync/               API tomonida server_groups/backend_servers'ni Postgres'dan o'qib lbd'ga push qiluvchi va sog'liqni orqaga yozuvchi
+  lbsync/               API tomonida server_groups/backend_servers'ni Postgres'dan o'qib lbd'ga push qiluvchi va sog'liqni orqaga yozuvchi; pullTraffic/writeTraffic — device_traffic_stats'ni yozuvchi
   capd/                capd: manager.go (tcpdump jarayon boshqaruvi), quota.go
                        (disk kvotasi), validate.go (MAC/yo'l tekshiruvi),
                        server.go (Unix-socket)
