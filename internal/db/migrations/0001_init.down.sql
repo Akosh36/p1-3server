@@ -1,0 +1,19 @@
+DROP TABLE IF EXISTS device_traffic_stats;
+DROP TABLE IF EXISTS system_metrics;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS traffic_captures;
+DROP TABLE IF EXISTS backend_servers;
+DROP TABLE IF EXISTS server_groups;
+DROP TABLE IF EXISTS access_grants;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS lan_networks;
+DROP TABLE IF EXISTS vpn_peers;
+DROP TABLE IF EXISTS switch_ports;
+DROP TABLE IF EXISTS admins;
+
+DROP TYPE IF EXISTS lan_type;
+DROP TYPE IF EXISTS capture_status;
+DROP TYPE IF EXISTS lb_algorithm;
+DROP TYPE IF EXISTS access_role;
+DROP TYPE IF EXISTS device_conn_type;
+DROP TYPE IF EXISTS admin_role;

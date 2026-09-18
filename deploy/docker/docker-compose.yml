@@ -1,0 +1,52 @@
+# Control-plane services (no special OS privileges): PostgreSQL, the REST
+# API, and the admin panel frontend. The data-plane daemons (netdiscd,
+# fwctl, lbd, capd) are NOT here — they need host networking / CAP_NET_ADMIN
+# and run as systemd units directly on the gateway host (see docs/deploy.md).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: p13server
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: p13server
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U p13server"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://p13server:${POSTGRES_PASSWORD}@postgres:5432/p13server?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, e.g. openssl rand -hex 32}
+      HTTP_ADDR: ":8080"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    # Data-plane control sockets live on the host at /run/p13server/*.sock;
+    # mount that directory read-write once the daemons exist (Phase 1+).
+    volumes:
+      - /run/p13server:/run/p13server
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8443:80" # put a real TLS-terminating reverse proxy in front in production
+
+volumes:
+  postgres_data:
