@@ -34,7 +34,7 @@ kira olmaydi (default-deny).
 | Phase 6 | `capd` — on-demand pcap yozib olish | ✅ Tayyor |
 | Phase 7 | `wgd` — site-to-site WireGuard (masofaviy Wireless LAN) | ✅ Tayyor |
 | Phase 8 | Backend trafik hisobi (userga qarab) + GPU metrikasi | ✅ Tayyor |
-| Phase 9 | LAN avtomatik tarmoq yaratish + port/LAN drill-down | ⏳ Keyingi |
+| Phase 9 | LAN avtomatik tarmoq yaratish + port/LAN drill-down | ✅ Tayyor |
 | Phase 10 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ⏳ Keyingi |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
@@ -144,6 +144,20 @@ hech qachon soxta `0%` emas. Ikkalasi ham haqiqiy `ip netns` topologiyasi
 + haqiqiy Postgres/`cmd/api`/`lbd` bilan uchtan-uchgacha sinaldi (200 KB
 haqiqiy fayl VIP orqali uzatildi, bazaga tushgan bayt soni tekshirildi).
 
+Qolgan 2 ta bo'shliq ham to'ldirildi. Uchinchisi — LAN sahifasi endi
+`netdiscd` aniqlagan har bir **wired switch** va **wireless SSID** uchun
+o'z `lan_networks` qatorini avtomatik yaratadi (avval bunday qatorlar
+faqat masofaviy VPN tarmoqlari uchun mavjud edi) — bir switchning aniq
+porti noma'lum qolgan qurilmalar (oddiy switch'larda SNMP MAC-jadvali
+ko'pincha yo'q, Phase 1'da hujjatlashtirilgan) umumiy "port aniqlanmagan"
+tarmoqqa yig'iladi, hech biri LAN sahifasidan tushib qolmaydi; har bir
+tarmoqning "mavjudligi" shu tarmoqda hozir kamida bitta onlayn qurilma
+borligidan hisoblanadi. To'rtinchisi — endi Portlar jadvalidagi har bir
+port va LAN tarmoqlari jadvalidagi har bir qator "Qurilmalar" tugmasiga
+ega: bosilganda pastdagi qurilmalar ro'yxati faqat o'sha port/tarmoqqa
+tegishlilarga filtrlanadi. Ikkalasi ham haqiqiy Postgres + haqiqiy
+`cmd/api` (`internal/discovery`) + real brauzer bilan sinaldi.
+
 ## Loyiha tuzilmasi
 
 ```
@@ -166,7 +180,8 @@ internal/
                         asosida GPU foizi, topilmasa nil (soxta 0 emas)
   metrics/             Gateway'ning o'z host metrikasini yig'uvchi (hostmetrics ustida)
   netdisc/              netdiscd'ning kollektorlari (ARP/dnsmasq/SNMP/hostapd) + Unix-socket server
-  discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash
+  discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash;
+                        switch/SSID bo'yicha lan_networks qatorlarini avtomatik yaratish
   firewall/             fwctl'ning nftables ruleset generator/apply/manager/socket serveri
   aclsync/               API tomonida access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
   lb/                  lbd'ning VIP/proksi/health-check/manager + Unix-socket serveri

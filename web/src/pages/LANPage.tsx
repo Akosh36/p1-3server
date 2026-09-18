@@ -126,12 +126,21 @@ function CreateRemoteVPNForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
+type DeviceFilter = { kind: 'port'; id: number; label: string } | { kind: 'lan'; id: number; label: string }
+
+function lanTypeLabel(type: LANNetwork['type']) {
+  if (type === 'wireless_remote_vpn') return 'Masofaviy (VPN)'
+  if (type === 'wireless_local') return 'Lokal WiFi'
+  return 'Simli'
+}
+
 export default function LANPage() {
   const { data: ports } = usePolling(() => api.get<SwitchPort[]>('/switch-ports'))
   const { data: networks, refresh: refreshNetworks } = usePolling(() => api.get<LANNetwork[]>('/lan-networks'))
   const { data: devices, refresh: refreshDevices } = usePolling(() => api.get<Device[]>('/devices'))
   const [showCreate, setShowCreate] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [filter, setFilter] = useState<DeviceFilter | null>(null)
 
   async function toggleNetwork(n: LANNetwork) {
     await api.patch(`/lan-networks/${n.id}`, { is_active: !n.is_active })
@@ -143,6 +152,13 @@ export default function LANPage() {
     await api.delete(`/lan-networks/${n.id}`)
     refreshNetworks()
   }
+
+  const allDevices = devices ?? []
+  const filteredDevices = !filter
+    ? allDevices
+    : filter.kind === 'port'
+      ? allDevices.filter((d) => d.switch_port_id === filter.id)
+      : allDevices.filter((d) => d.lan_network_id === filter.id)
 
   return (
     <div>
@@ -164,11 +180,18 @@ export default function LANPage() {
                 <th className="pb-2 font-medium">Label</th>
                 <th className="pb-2 font-medium">VLAN</th>
                 <th className="pb-2 font-medium">Holat</th>
+                <th className="pb-2"></th>
               </tr>
             </thead>
             <tbody>
               {(ports ?? []).map((p) => (
-                <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
+                <tr
+                  key={p.id}
+                  style={{
+                    borderTop: '1px solid var(--border)',
+                    background: filter?.kind === 'port' && filter.id === p.id ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined,
+                  }}
+                >
                   <td className="py-2" style={{ color: 'var(--text)' }}>{p.switch_name}</td>
                   <td className="py-2" style={{ color: 'var(--text)' }}>{p.port_number}</td>
                   <td className="py-2" style={{ color: 'var(--text)' }}>{p.label || '—'}</td>
@@ -178,6 +201,15 @@ export default function LANPage() {
                       {p.link_status ? '● Ulangan' : '○ Uzilgan'}
                     </span>
                   </td>
+                  <td className="py-2 text-right">
+                    <button
+                      onClick={() => setFilter({ kind: 'port', id: p.id, label: `${p.switch_name} — port ${p.port_number}` })}
+                      className="text-xs"
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      Qurilmalar
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -186,7 +218,7 @@ export default function LANPage() {
       </Panel>
 
       <Panel
-        title="Wireless (lokal WiFi + masofaviy VPN LAN)"
+        title="LAN tarmoqlari (simli, lokal WiFi, masofaviy VPN)"
         action={
           <button
             onClick={() => setShowCreate((v) => !v)}
@@ -228,41 +260,67 @@ export default function LANPage() {
             <tbody>
               {(networks ?? []).map((n) => (
                 <Fragment key={n.id}>
-                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                  <tr
+                    style={{
+                      borderTop: '1px solid var(--border)',
+                      background: filter?.kind === 'lan' && filter.id === n.id ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined,
+                    }}
+                  >
                     <td className="py-2" style={{ color: 'var(--text)' }}>{n.name}</td>
-                    <td className="py-2" style={{ color: 'var(--text)' }}>
-                      {n.type === 'wireless_remote_vpn' ? 'Masofaviy (VPN)' : 'Lokal WiFi'}
-                    </td>
+                    <td className="py-2" style={{ color: 'var(--text)' }}>{lanTypeLabel(n.type)}</td>
                     <td className="py-2">
                       <span style={{ color: n.is_reachable ? 'var(--success)' : 'var(--danger)' }}>
                         {n.is_reachable ? '● Bor' : '○ Yo\'q'}
                       </span>
                     </td>
                     <td className="py-2">
-                      <button
-                        onClick={() => toggleNetwork(n)}
-                        className="px-2 py-1 rounded text-xs"
-                        style={{
-                          background: n.is_active ? 'color-mix(in srgb, var(--success) 15%, transparent)' : 'color-mix(in srgb, var(--text-muted) 15%, transparent)',
-                          color: n.is_active ? 'var(--success)' : 'var(--text-muted)',
-                        }}
-                      >
-                        {n.is_active ? 'Faol (bosib o\'chirish)' : 'O\'chirilgan (bosib yoqish)'}
-                      </button>
+                      {n.type === 'wireless_remote_vpn' ? (
+                        <button
+                          onClick={() => toggleNetwork(n)}
+                          className="px-2 py-1 rounded text-xs"
+                          style={{
+                            background: n.is_active ? 'color-mix(in srgb, var(--success) 15%, transparent)' : 'color-mix(in srgb, var(--text-muted) 15%, transparent)',
+                            color: n.is_active ? 'var(--success)' : 'var(--text-muted)',
+                          }}
+                        >
+                          {n.is_active ? 'Faol (bosib o\'chirish)' : 'O\'chirilgan (bosib yoqish)'}
+                        </button>
+                      ) : (
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }} title="Bu tarmoq netdiscd tomonidan avtomatik aniqlangan — uni shu yerdan o'chirib bo'lmaydi, faqat kuzatiladi">
+                          — (avtomatik)
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 text-right whitespace-nowrap">
-                      {n.type === 'wireless_remote_vpn' && (
-                        <button
-                          onClick={() => setExpandedId(expandedId === n.id ? null : n.id)}
-                          className="text-xs mr-3"
-                          style={{ color: 'var(--accent)' }}
-                        >
-                          {expandedId === n.id ? 'Yopish' : 'Tafsilot'}
-                        </button>
-                      )}
-                      <button onClick={() => deleteNetwork(n)} className="text-xs" style={{ color: 'var(--danger)' }}>
-                        O'chirish
+                      <button
+                        onClick={() => setFilter({ kind: 'lan', id: n.id, label: n.name })}
+                        className="text-xs mr-3"
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        Qurilmalar
                       </button>
+                      {n.type === 'wireless_remote_vpn' ? (
+                        <>
+                          <button
+                            onClick={() => setExpandedId(expandedId === n.id ? null : n.id)}
+                            className="text-xs mr-3"
+                            style={{ color: 'var(--accent)' }}
+                          >
+                            {expandedId === n.id ? 'Yopish' : 'Tafsilot'}
+                          </button>
+                          <button onClick={() => deleteNetwork(n)} className="text-xs" style={{ color: 'var(--danger)' }}>
+                            O'chirish
+                          </button>
+                        </>
+                      ) : (
+                        <span
+                          className="text-xs"
+                          style={{ color: 'var(--text-muted)' }}
+                          title="netdiscd tomonidan avtomatik yaratilgan — o'chirilsa, keyingi aniqlashda qayta paydo bo'ladi"
+                        >
+                          (o'chirib bo'lmaydi)
+                        </span>
+                      )}
                     </td>
                   </tr>
                   {expandedId === n.id && n.type === 'wireless_remote_vpn' && (
@@ -295,8 +353,21 @@ export default function LANPage() {
         )}
       </Panel>
 
-      <Panel title="Barcha aniqlangan qurilmalar — nom berish va huquq belgilash">
-        <AllDevicesTable devices={devices ?? []} onChanged={refreshDevices} />
+      <Panel
+        title={filter ? `Qurilmalar — ${filter.label}` : "Barcha aniqlangan qurilmalar — nom berish va huquq belgilash"}
+        action={
+          filter && (
+            <button onClick={() => setFilter(null)} className="text-xs" style={{ color: 'var(--accent)' }}>
+              Filtrni tozalash (barchasini ko'rsatish)
+            </button>
+          )
+        }
+      >
+        {filter && filteredDevices.length === 0 ? (
+          <EmptyNote>Bu tarmoqda hozircha hech qanday qurilma yo'q.</EmptyNote>
+        ) : (
+          <AllDevicesTable devices={filteredDevices} onChanged={refreshDevices} />
+        )}
       </Panel>
     </div>
   )

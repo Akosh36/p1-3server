@@ -209,7 +209,9 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 `backend_metrics` jadvali, Phase 6'da `0003_capture_stopped.up.sql` bilan
 `capture_status`ga `'stopped'` qiymati, Phase 8'da `0004_gpu_metrics.up.sql`
 bilan `system_metrics`/`backend_metrics`ga `gpu_percent`/`gpu_mem_percent`
-(ikkalasi ham `NULL`ga ruxsat beriladigan) qo'shildi, quyida ko'rsatilgan):
+(ikkalasi ham `NULL`ga ruxsat beriladigan), Phase 9'da
+`0005_lan_network_unique.up.sql` bilan `lan_networks`ga
+`UNIQUE (type, name)` qo'shildi, quyida ko'rsatilgan):
 
 ```
 admins(id, username, password_hash, totp_secret, role[super_admin|admin],
@@ -231,7 +233,12 @@ vpn_peers(id, name, public_key, allowed_subnet, endpoint, is_active, last_handsh
 lan_networks(id, name, type, vpn_peer_id, is_active, is_reachable, last_status_check_at)
   -- type='wireless_remote_vpn' bo'lganda vpn_peer_id orqali yuqoridagisiga
   -- bog'lanadi; is_active shu yerdagi "Active/Deactive tugmasi", ikkalasi
-  -- (bu va vpn_peers.is_active) faol bo'lishi kerak tunnel ko'tarilishi uchun
+  -- (bu va vpn_peers.is_active) faol bo'lishi kerak tunnel ko'tarilishi uchun.
+  -- Phase 9: type='wired'/'wireless_local' qatorlarini internal/discovery
+  -- avtomatik yaratadi (bittasi har bir switch/SSID uchun) — bularda hech
+  -- qanday daemon boshqarmagani uchun is_active doim true, is_reachable esa
+  -- "shu tarmoqda kamida bitta onlayn qurilma bormi"dan hisoblanadi.
+  -- UNIQUE(type, name) shu avtomatik upsert'ni ON CONFLICT bilan xavfsiz qiladi.
 
 server_groups(id, nickname, color_hex, vip_address, vip_port, protocol,
               algorithm[round_robin|least_conn], is_active, created_at)
@@ -297,6 +304,11 @@ internal/
   netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
                            store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
   discovery/              API tomonida: netdiscd snapshot'ini pull qilib Postgres'ga upsert
+                           (devices, switch_ports); Phase 9: upsertWiredLANNetworks/
+                           upsertWirelessLocalLANNetworks — switch/SSID bo'yicha
+                           lan_networks qatorlarini avtomatik yaratadi va
+                           devices.lan_network_id'ni hal qiladi, updateLocalLANReachability —
+                           ularning is_reachable'ini onlayn qurilma borligidan hisoblaydi
   firewall/               fwctl: ruleset.go (nft matn generator, pure func, NAT+WAN qattiqlashtirish
                            shu yerda), apply.go (nft -f chaqiradi), gateway.go (ip_forward yoqadi),
                            manager.go (state + serialize), server.go (Unix-socket)
@@ -1061,11 +1073,128 @@ so'ralgan, lekin hech qachon amalga oshirilmagan edi).
   hali tekshirilmagan. Ishlab chiqarish muhitida GPU'li backend bo'lsa,
   birinchi navbatda shu yo'lni haqiqiy `nvidia-smi` bilan tasdiqlash kerak.
 
+### ✅ Phase 9 — tayyor va real sinaldi (haqiqiy Postgres + soxta-netdiscd HTTP fixture + real brauzer)
+
+Qayta ko'rib chiqishda topilgan qolgan 2 ta bo'shliqni to'ldiradi: LAN
+sahifasi wired/wireless_local tarmoqlarini hech qachon `lan_networks`
+qatori sifatida ko'rsatmasdi (faqat masofaviy VPN tarmoqlari ko'rinardi),
+va "port/LAN bosilganda o'sha ichidagi qurilmalar ko'rinishi" (bo'lim 2.3)
+hech qachon amalga oshirilmagan edi.
+
+**1) Wired/wireless_local LAN tarmoqlarini avtomatik yaratish
+(`internal/discovery`):**
+
+- `reconcile()` endi switch_ports'ni upsert qilgandan so'ng ikkita yangi
+  funksiyani chaqiradi: `upsertWiredLANNetworks` — netdiscd shu tsiklda
+  xabar qilgan har bir **distinct switch** uchun bitta `lan_networks`
+  qatorini (`type='wired'`, nomi — switch nomi) ta'minlaydi;
+  `upsertWirelessLocalLANNetworks` — har bir **distinct SSID** uchun xuddi
+  shunday (`type='wireless_local'`). Ikkalasi ham `switch_ports`ning o'zi
+  ishlatgan naqshni takrorlaydi: haqiqiy `UNIQUE (type, name)` cheklovi
+  (`0005_lan_network_unique.up.sql`) + `ON CONFLICT ... RETURNING id` —
+  racy select-then-insert emas.
+- **Muhim, real qaror:** Phase 1'da hujjatlashtirilgan cheklov — oddiy
+  net-snmp agentlari `dot1dTpFdbTable` (MAC→port) bermaydi — degani ko'p
+  wired qurilma hech qachon o'zining aniq switch/portini bilmaydi
+  (`SwitchName` bo'sh qoladi). Bunday qurilmalarni **hech qanday LAN
+  tarmog'isiz qoldirish o'rniga**, ular yagona umumiy
+  `"Simli tarmoq (port aniqlanmagan)"` qatoriga yig'iladi — bu soxta
+  ma'lumot emas, aksincha "bu qurilma simli, lekin qaysi switch/portligi
+  noma'lum" degan halol holatni ifodalaydi.
+- Har bir qurilma qatori endi `lan_network_id`ni ham to'g'ridan-to'g'ri
+  o'sha tsiklda hal qiladi va yozadi (avvalgi `switch_port_id`/`ssid`
+  bilan bir xil `COALESCE(EXCLUDED..., devices...)` naqshida — yangi
+  ma'lumot yo'q bo'lsa eski qiymat saqlanadi, hech qachon nolga
+  tushirilmaydi).
+- `updateLocalLANReachability` — har tsiklda (5s) wired/wireless_local
+  tarmoqlarning `is_reachable`sini **"shu tarmoqda hozir kamida bitta
+  onlayn qurilma bormi"** sifatida hisoblaydi. Bu Phase 1'ning o'zi
+  har bir qurilma uchun ishlatgan xuddi shu haqiqiy "onlayn/offlayn"
+  signalini shunchaki tarmoq darajasida jamlaydi — soxta ping yoki
+  qo'shimcha probe kerak emas. Masofaviy VPN tarmoqlarining
+  `is_reachable`siga tegmaydi — u hali ham `wgsync` (Phase 7) mas'ul.
+- Bu qatorlar hech qachon o'chirilmaydi (Phase 1'ning "qurilma hech
+  qachon yo'qolmaydi, faqat offlayn bo'ladi" falsafasi bilan bir xil) —
+  switch/SSID vaqtincha ko'rinmay qolsa, tarmoq qatori qoladi, faqat
+  `is_reachable` `false`ga tushadi.
+
+**2) Port/LAN bosilganda qurilmalarni filtrlash (`LANPage.tsx`):**
+
+- Har bir switch-port qatoriga va har bir LAN-tarmoq qatoriga
+  **"Qurilmalar"** tugmasi qo'shildi. Bosilganda sahifa pastidagi
+  "Barcha aniqlangan qurilmalar" paneli **filtrlangan** ro'yxatga
+  almashadi (sarlavha "Qurilmalar — <switch> — port <N>" yoki
+  "Qurilmalar — <tarmoq nomi>"ga o'zgaradi, "Filtrni tozalash" tugmasi
+  bilan asl holatga qaytariladi) — bitta umumiy `AllDevicesTable`
+  komponentiga faqat boshqa `devices` massivi uzatiladi, alohida
+  komponent yozilmagan.
+- Tanlangan port/tarmoq qatori engil fon rangi bilan ajratib ko'rsatiladi.
+- **Avtomatik (netdiscd) tarmoq qatorlari uchun UI to'g'irlandi:**
+  bunday qatorlarda "Faol/O'chirilgan" tugmasi va "O'chirish" tugmasi
+  endi ko'rinmaydi (o'rniga "— (avtomatik)" va "(o'chirib bo'lmaydi)" —
+  chunki bu qatorlarni o'chirish/o'zgartirish ma'nosiz: hech qanday
+  daemon ularni yoqib/o'chira olmaydi, va o'chirilsa ham netdiscd'ning
+  keyingi tsikli qayta yaratadi). Bu tugmalar faqat haqiqiy boshqarish
+  imkoniyati bor `wireless_remote_vpn` qatorlarida qoladi.
+- Panel sarlavhasi "Wireless (lokal WiFi + masofaviy VPN LAN)"dan
+  "LAN tarmoqlari (simli, lokal WiFi, masofaviy VPN)"ga o'zgartirildi —
+  endi bu jadval uchala turni ham ko'rsatadi, alohida "Simli LAN
+  tarmoqlari" paneli qo'shilmadi (mavjud "Turi" ustuni buni allaqachon
+  farqlaydi, to'rtinchi panel ortiqcha bo'lardi).
+
+**Sinov — haqiqiy Postgres + real `cmd/api` + soxta-lekin-real-HTTP
+netdiscd fixture + real brauzer:**
+
+netdiscd'ning o'z kollektorlari (ARP/SNMP/hostapd) Phase 1'da allaqachon
+real uskunaga qarshi qattiq sinalgan — bu safar YANGI kod faqat
+`internal/discovery.reconcile()` (Snapshot → Postgres), shuning uchun
+netdiscd'ning o'rniga **aynan shu JSON kontraktini gapiradigan**, alohida
+kichik Go dasturi (`/run/p13server/netdiscd.sock`da haqiqiy Unix-socket
+HTTP serveri) yozilib, quyidagi haqiqiy stsenariy sinaldi:
+
+1. Ikkita port bir xil switch'da (`switchA`), bitta wired qurilma shu
+   portlardan biriga bog'langan, bitta wired qurilma **hech qanday
+   switch ma'lumotisiz**, ikkita qurilma bir xil SSID'da
+   (`OfficeWiFi`, biri onlayn biri offlayn), bitta qurilma boshqa SSID'da
+   (`GuestWiFi`, offlayn).
+2. Haqiqiy `cmd/api` (`internal/discovery.Run` bilan) ishga tushirilib,
+   real Postgres'da tekshirildi: `switchA` (wired, `is_reachable=true`),
+   `"Simli tarmoq (port aniqlanmagan)"` (wired, `is_reachable=true` —
+   portsiz qurilma onlayn edi), `OfficeWiFi` (wireless_local,
+   `is_reachable=true`), `GuestWiFi` (wireless_local, `is_reachable=false`)
+   — to'rttasi ham aniq kutilganidek.
+3. Har bir qurilmaning `lan_network_id`/`switch_port_id`i to'g'ridan-to'g'ri
+   SQL bilan **va** `GET /api/devices` orqali tekshirilib, ikkalasida ham
+   to'g'ri qiymatlar tasdiqlandi.
+4. **Idempotentlik**: ikki marta ketma-ket reconciliation tsiklidan keyin
+   (10 soniya) `lan_networks`da hech qanday dublikat qator yo'qligi
+   tasdiqlandi (`GROUP BY type, name` — hammasi `count=1`).
+5. **LAN sahifasi haqiqiy headless brauzerda** (Playwright): `switchA`
+   port 1'ning "Qurilmalar" tugmasi bosilganda faqat o'sha portdagi
+   qurilma ko'rindi (portsiz qurilma **ko'rinmadi**); "Filtrni tozalash"
+   dan keyin `OfficeWiFi-P9Test` qatorining "Qurilmalar" tugmasi bosilganda
+   faqat o'sha SSID'dagi ikkala qurilma ko'rindi (`GuestWiFi`dagi qurilma
+   **ko'rinmadi**). Avtomatik qatorlarda "Faol" ustuni "— (avtomatik)"ni,
+   amal ustuni "(o'chirib bo'lmaydi)"ni to'g'ri ko'rsatdi. Sahifada
+   bironta yangi konsol xatosi yo'q (mavjud, bu ishga aloqasiz 503'lar —
+   `wgd` ishga tushirilmagani uchun `/api/wireguard/local-info`dan — bundan
+   oldingi fazalarda ham xuddi shunday bo'lgan, kutilgan holat).
+
+**Bilingan cheklovlar:** `wireless_remote_vpn` turidagi tarmoqlar uchun
+"Qurilmalar" tugmasi doim bo'sh ro'yxat qaytaradi — chunki (Phase 7'da
+hujjatlashtirilganidek) masofaviy VPN'dagi qurilmalar netdiscd tomonidan
+hech qachon kuzatilmaydi, faqat `lan_networks`/`vpn_peers` darajasida
+mavjud. Bu soxta emas — shunchaki bu funksiyaning haqiqiy qamrovi (faqat
+netdiscd kuzatgan LAN qurilmalari). Wired guruhlash faqat switch darajasida
+(VLAN darajasida emas) — `switch_ports.vlan` ustuni mavjud bo'lsa ham,
+har bir VLAN uchun alohida tarmoq qatori yaratilmaydi (bu sandbox'dagi
+sinov muhitida haqiqiy VLAN-aware switch yo'qligi va spetsifikatsiyaning
+bunga aniq talab qo'ymagani uchun soddaroq shakl tanlandi).
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 9 | LAN sahifasida wired/wireless_local tarmoqlarini avtomatik yaratish (`netdiscd`dan) + port/LAN bosilganda qurilmalarni filtrlash (drill-down) — qayta ko'rib chiqishda topilgan 3- va 4-bo'shliqlar | — |
 | Phase 10 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
 ---
@@ -1160,7 +1289,8 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
 Phase 4 (`lbd`), Phase 5 (`backendagentd`), Phase 6 (`capd`), Phase 7
-(`wgd`) va Phase 8 (backend trafik hisobi + GPU metrikasi) tayyor va real
+(`wgd`), Phase 8 (backend trafik hisobi + GPU metrikasi) va Phase 9 (LAN
+tarmoqlarini avtomatik aniqlash + port/LAN drill-down) tayyor va real
 sinaldi — bo'lim 8'ga qarang. Bo'lim 2.3'dagi "Har bir bo'lim uchun
 talablar" jadvalidagi **barcha qatorlar** endi haqiqiy, ishlaydigan
 funksionallik bilan qoplangan: bu server to'liq ishlaydigan LAN gateway,
@@ -1171,24 +1301,23 @@ VIP'lar orqali orqadagi serverlarga taqsimlaydi (va har bir userning
 qaysi serverga qancha trafik ishlatganini hisoblaydi), har bir backend
 serverning o'z host metrikasi (CPU/RAM/Disk/tarmoq **va GPU**, mavjud
 bo'lsa) ko'rinadi, admin istalgan userning trafigini on-demand pcap
-sifatida yozib Wireshark'da tekshira oladi, va masofadagi ikkinchi LAN
+sifatida yozib Wireshark'da tekshira oladi, masofadagi ikkinchi LAN
 tarmog'i haqiqiy, shifrlangan WireGuard tuneli orqali bog'lanib, LAN
 sahifasida Active/Deactive qilinadi va real-vaqtda reachability'i
-ko'rinadi.
+ko'rinadi, va endi LAN sahifasi har bir wired switch/wireless SSID uchun
+ham o'z tarmoq qatorini avtomatik ko'rsatib, istalgan port yoki LAN
+tarmog'i bosilganda faqat o'sha ichidagi qurilmalarni filtrlab beradi.
 
-Navbatdagi ish — **Phase 9: LAN sahifasida wired/wireless_local
-tarmoqlarini avtomatik yaratish + port/LAN bosilganda qurilmalarni
-filtrlash (drill-down)** — bo'lim 8'dagi Phase 9 qatoriga qarang. Undan
-keyin **Phase 10: RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik
-audit, dizayn siyqallashtirish** — bu endi yangi tarmoq funksiyasi emas,
-balki mavjud bosqichlarni qattiqlashtirish bosqichi: har bir endpoint'ning
-`requireAuth`/`requireSuperAdmin` qo'llanilishini qayta ko'rib chiqish,
-xavfsizlik zaifliklarini qidirish (masalan admin JWT muddati, parol
-siyosati, audit log to'liqligi), va to'planib qolgan kichik UI/UX
-nomutanosibliklarni tekshirish. Bu boshqa bosqichlardan farqli — aniq
-bitta yangi daemon yoki funksiya emas, shuning uchun boshlashdan oldin
-foydalanuvchidan aniq qamrov so'rash kerak bo'ladi (masalan: "audit"
-nimani anglatadi — kod review'mi, avtomatlashtirilgan xavfsizlik
-skaneri, yoki muayyan zaifliklarni qidirishmi). Har bosqich tugagach
-ushbu faylni va `README.md`/`docs/deploy.md`ni yangilab borish tavsiya
-etiladi.
+Navbatdagi ish — **Phase 10: RBAC'ning API bo'ylab to'liq qo'llanilishi,
+xavfsizlik audit, dizayn siyqallashtirish** — bu endi yangi tarmoq
+funksiyasi emas, balki mavjud bosqichlarni qattiqlashtirish bosqichi:
+har bir endpoint'ning `requireAuth`/`requireSuperAdmin` qo'llanilishini
+qayta ko'rib chiqish, xavfsizlik zaifliklarini qidirish (masalan admin
+JWT muddati, parol siyosati, audit log to'liqligi), va to'planib qolgan
+kichik UI/UX nomutanosibliklarni tekshirish. Bu boshqa bosqichlardan
+farqli — aniq bitta yangi daemon yoki funksiya emas, shuning uchun
+boshlashdan oldin foydalanuvchidan aniq qamrov so'rash kerak bo'ladi
+(masalan: "audit" nimani anglatadi — kod review'mi, avtomatlashtirilgan
+xavfsizlik skaneri, yoki muayyan zaifliklarni qidirishmi). Har bosqich
+tugagach ushbu faylni va `README.md`/`docs/deploy.md`ni yangilab borish
+tavsiya etiladi.

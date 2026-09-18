@@ -597,6 +597,75 @@ the actual flag/format assumptions are what's under test
 needs validation against real NVIDIA hardware before relying on it in
 production.
 
+### LAN network auto-discovery + drill-down (Phase 9 — shipped)
+
+No new daemon — this phase extends `internal/discovery` (the control-plane
+half of Phase 1's `netdiscd`) and the LAN page. Migration
+`0005_lan_network_unique.up.sql` adds a `UNIQUE (type, name)` constraint to
+`lan_networks` so the new upsert logic can use the same `ON CONFLICT`
+pattern `upsertSwitchPorts` already uses, rather than a racy
+select-then-insert.
+
+Every reconciliation tick, `internal/discovery.reconcile` now also ensures
+one `lan_networks` row (`type='wired'`) per distinct switch reported in
+the snapshot, and one row (`type='wireless_local'`) per distinct SSID —
+then resolves each device's `lan_network_id` to the matching row (or, for
+a wired device netdiscd couldn't tie to a specific switch — a real,
+already-documented limitation: many switches' SNMP agents don't expose
+`dot1dTpFdbTable`, the MAC-to-port table — a single catch-all "port
+aniqlanmagan" network, so no wired device is ever left without a LAN
+network at all). A closing step recomputes `is_reachable` for every
+wired/wireless_local network as "does it currently have at least one
+online device" — the same real online/offline signal Phase 1 already
+tracks per-device, just aggregated; remote VPN networks' `is_reachable`
+is untouched here (that's still `wgsync`, Phase 7). None of this ever
+deletes a row: a switch or SSID that stops appearing just settles to
+`is_reachable = false`, matching how a device itself goes offline instead
+of disappearing.
+
+On the LAN page, every switch-port row and every LAN-network row got a
+"Qurilmalar" (devices) button — clicking it filters the devices table
+below to just that port's or network's devices, with a "Filtrni tozalash"
+button to go back to the unfiltered list. Auto-discovered rows
+(`wired`/`wireless_local`) no longer show the Active/Deactive toggle or a
+delete button — there's no daemon that could act on either for a physical
+switch or WiFi AP, and deleting one would just have `discovery`'s next
+tick recreate it; those controls remain only on `wireless_remote_vpn`
+rows, which really do have `wgd` behind them.
+
+**Verified with a real Postgres and a real `cmd/api`, against a
+purpose-built fake `netdiscd`:** netdiscd's own collectors (ARP, SNMP,
+hostapd) were already verified against real tooling in Phase 1 — what's
+new here is purely `reconcile`'s handling of the snapshot it receives, so
+a small standalone Go program was written to serve the exact same
+`GET /snapshot` JSON contract over a real Unix socket at
+`/run/p13server/netdiscd.sock`, standing in for netdiscd the way a plain
+`python3 -m http.server` has stood in for a "backend" in earlier phases'
+tests. Fed a snapshot with two ports on one switch, one wired device tied
+to a port, one wired device with no switch info at all, two
+`wireless_local` devices sharing one SSID (one online, one not), and one
+on a second SSID (offline): the resulting `lan_networks` rows matched
+exactly — the named switch and the "port aniqlanmagan" catch-all both
+`is_reachable = true` (each had an online device), the shared SSID
+`is_reachable = true`, the lone offline SSID `is_reachable = false` — and
+every device's `lan_network_id`/`switch_port_id` was correct both by
+direct SQL and through `GET /api/devices`. Running two reconciliation
+ticks back-to-back produced no duplicate rows. The LAN page was checked in
+a real headless browser (Playwright): clicking a specific port's
+"Qurilmalar" button showed only the device on that port (not the one with
+no port info); clicking a specific SSID's showed only that SSID's two
+devices (not the other SSID's); auto-discovered rows correctly showed
+"— (avtomatik)" and "(o'chirib bo'lmaydi)" instead of live controls.
+
+**Known limitations:** a `wireless_remote_vpn` network's "Qurilmalar"
+button always shows an empty list — as documented in Phase 7, devices
+behind a WireGuard tunnel are never tracked as `devices` rows at all, so
+there's nothing for this drill-down to find; that's this feature's real
+scope (netdiscd-observed LAN devices), not a bug. Wired grouping is
+per-switch only, not per-VLAN, even though `switch_ports.vlan` exists —
+this sandbox has no VLAN-aware switch to validate finer-grained grouping
+against, and the spec doesn't call for it.
+
 ## Local development (no Docker)
 
 ```bash
