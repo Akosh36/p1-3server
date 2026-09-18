@@ -175,10 +175,10 @@ tozaligi uchun.
 | **Admin** | ✅ | ✅ | ✅ |
 | Ro'yxatsiz | ❌ | ❌ | ❌ |
 
-nftables'da ikkita named set (`allowed_user`, `allowed_admin`) orqali amalga
-oshiriladi, default policy — **DROP**. `fwctl` daemoni bu setlarni
-`devices`/`access_grants` jadvaliga mos ravishda ~1-2 soniyada bir
-sinxronlaydi (Phase 2, hali yozilmagan).
+nftables'da ikkita named set (`allowed_user_mac`, `allowed_admin_mac`) orqali
+amalga oshiriladi, default policy — **DROP**. `internal/aclsync` (control-plane)
+`devices`/`access_grants` jadvalini har 2 soniyada o'qib, `fwctl`ga (data-plane)
+push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 
 ---
 
@@ -191,7 +191,7 @@ sinxronlaydi (Phase 2, hali yozilmagan).
 | Ma'lumotlar bazasi | **PostgreSQL 16** (+ TimescaleDB, ixtiyoriy) | Relyatsion + vaqt-qatori ma'lumot bitta DB'da |
 | DHCP | **dnsmasq** | Yengil, ishonchli (lease fayli Phase 1'da o'qiladi; DHCP serverning o'zi hali ulanmagan — Phase 3) |
 | Tarmoq topish | **ARP jadvali + `gosnmp`** (IF-MIB/BRIDGE-MIB) + hostapd control socket | Phase 1'da tayyor, real sinaldi |
-| Firewall | **nftables** | Zamonaviy Linux standarti, named sets (hali ulanmagan — Phase 2) |
+| Firewall | **nftables** | Zamonaviy Linux standarti, named sets — Phase 2'da tayyor va real sinaldi |
 | L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh (hali yozilmagan — Phase 4) |
 | Paket ushlash | **libpcap**/tcpdump asosida `capd` | .pcap to'g'ridan-to'g'ri Wireshark'da ochiladi (hali yozilmagan — Phase 6) |
 | VPN | **WireGuard** | Eng tez va sodda site-to-site (hali yozilmagan — Phase 7) |
@@ -250,6 +250,7 @@ Migratsiyalar `internal/db/migrate.go` orqali **avtomatik** ishga tushadi
 ```
 cmd/api/main.go          REST API entrypoint (bootstrap super_admin, migratsiya, HTTP server)
 cmd/netdiscd/main.go     netdiscd entrypoint (kollektorlarni ishga tushiradi, socket serveri)
+cmd/fwctl/main.go        fwctl entrypoint (deny-all baseline, socket serveri)
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
@@ -260,6 +261,9 @@ internal/
   netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
                            store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
   discovery/              API tomonida: netdiscd snapshot'ini pull qilib Postgres'ga upsert
+  firewall/               fwctl: ruleset.go (nft matn generator, pure func), apply.go (nft -f
+                           chaqiradi), manager.go (state + serialize), server.go (Unix-socket)
+  aclsync/                API tomonida: access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
   src/context/            AuthContext (JWT holati)
@@ -269,7 +273,8 @@ web/                      React + TypeScript + Vite admin paneli
 deploy/
   docker/                 api.Dockerfile, web.Dockerfile, docker-compose.yml (control-plane)
   systemd/netdiscd.service  netdiscd uchun tayyor unit fayl
-  systemd/, nftables/, dnsmasq/   Qolgan data-plane uchun — bosqichma-bosqich to'ldiriladi
+  systemd/fwctl.service   fwctl uchun tayyor unit fayl
+  nftables/, dnsmasq/     Qolgan data-plane uchun — bosqichma-bosqich to'ldiriladi
 docs/deploy.md            To'liq deploy qo'llanmasi (control-plane vs data-plane)
 README.md                 Loyiha holati jadvali + tezkor ishga tushirish
 ```
@@ -351,11 +356,74 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
     netdiscd tomonidan aniqlanmaydi — bu alohida VPN peer'ning o'z LAN'i,
     kelajakda alohida mexanizm kerak bo'ladi.
 
+### ✅ Phase 2 — tayyor va real sinaldi (nftables + `ip netns` orqali haqiqiy trafik bilan)
+
+- **`fwctl`** (`cmd/fwctl`, `internal/firewall/`) — Postgres'ga umuman ulanmaydigan
+  daemon (netdiscd bilan bir xil printsip, lekin teskari yo'nalishda: control-plane
+  MA'LUMOTNI fwctl'ga **push** qiladi, undan pull qilmaydi):
+  - Ishga tushganda darhol **deny-all baseline**'ni yuklaydi (`ApplyBaseline`) —
+    control-plane'dan birinchi sync kelmaguncha ham, fwctl qulab tushib qayta
+    ishga tushsa ham, standart holat har doim "hech kim kirolmaydi", hech qachon
+    "qoidalar yo'q = hammaga ochiq" emas.
+  - `/run/p13server/fwctl.sock` orqali `POST /sync {user_macs, admin_macs}` va
+    `GET /status` qabul qiladi.
+  - Har bir sync'da **butun nftables jadvalini atomik ravishda** (`nft -f -`,
+    bitta kernel tranzaksiyasi) qayta quradi: `add table` → `flush table` →
+    setlarni e'lon qilish+flush qilish → elementlarni qo'shish → zanjir/qoidalarni
+    qayta yozish. Bu "diff qilib qo'shish/o'chirish" emas, **to'liq almashtirish** —
+    hech qachon eski va yangi holat aralashib qolmaydi.
+  - 2 ta zanjir: `lan_forward` (`forward` hook) — faqat `allowed_user_mac` yoki
+    `allowed_admin_mac`dagi qurilmalar forward qilinadi; `management_input`
+    (`input` hook) — faqat `allowed_admin_mac` `FWCTL_MANAGEMENT_PORTS`ga
+    (standart `22,8080`) kira oladi. Ikkalasi ham `policy drop`.
+  - DDoS baseline (qaror #16): ICMP echo-request rate-limit, va har bir
+    admin/user MAC (yoki boshqaruv porti uchun har bir source IP) uchun
+    alohida **dinamik meter** orqali yangi-ulanish tezligi cheklanadi —
+    aniq sonlar va sabablari `internal/firewall/ruleset.go`da comment
+    sifatida yozilgan.
+- **`internal/aclsync`** (control-plane, `cmd/api` ichida) — `devices`+
+  `access_grants`ni har 2 soniyada o'qib, MAC ro'yxatlarini fwctl'ga push
+  qiladi. fwctl ishlamasa, bir marta ogohlantirib jim davom etadi.
+- **`GET /api/firewall/status`** qo'shildi — Firewall sahifasi endi ikkita
+  holatni yonma-yon ko'rsatadi: DB'dagi "nima bo'lishi kerak" (access_grants)
+  va fwctl'dan kelgan "hozir kernelda nima yuklangan" (haqiqiy holat) — ikkisi
+  farq qilsa, bu sinxronizatsiya kechikishi yoki fwctl ulanmaganini bildiradi.
+- **Sinov — bu safar unit testdan ham uzoqroqqa borildi:** `ip netns` orqali
+  butunlay izolyatsiyalangan 3 ta tarmoq nomlar maydoni qurildi (`lan` qurilma
+  ↔ `gw`, haqiqiy fwctl+nftables ishlaydigan ↔ `backend` nishon), va **haqiqiy
+  `curl` trafigi** bilan butun kirish matritsasi tekshirildi: ro'yxatsiz →
+  bloklangan (forward HAM input HAM), user → forward ochiq/input yopiq, admin →
+  ikkalasi ochiq, **bekor qilish → yana bloklangan**, qayta berish → yana ochiq.
+  Keyin xuddi shu zanjir **haqiqiy Postgres orqali** (`internal/aclsync`ning
+  o'zi, qo'lda curl qilmasdan) ham qayta tasdiqlandi.
+- **Shu qattiq sinov davomida 2 ta real nftables xatosi topilib tuzatildi**
+  (ikkalasi ham endi kodda va shu yerda hujjatlashtirilgan, chunki hech qanday
+  qo'llanma/AI training bu ikkisini aniq aytmaydi):
+  1. Inline `meter name { ... }` sintaksisi meter'ni birinchi marta yashirin
+     yaratadi, lekin `flush table` uni o'chirmaydi — keyingi reconciliation
+     "File exists" xatosi bilan qulaydi. Yechim: meter'larni oldindan
+     `add set ... { flags dynamic; }` bilan e'lon qilib, qoidada
+     `update @name { ... }` orqali ishlatish.
+  2. **`flush table` mavjud named set'larning elementlarini tozalamaydi**
+     (faqat zanjir/qoidalarni) — bu spetsifikatsiyada yoki odatiy hujjatlarda
+     aniq aytilmagan, xulq-atvor sinov orqali aniqlangan. Buning oqibati juda
+     jiddiy edi: **bekor qilingan (revoke) qurilma MAC'i hech qachon
+     `allowed_user_mac`/`allowed_admin_mac`dan chiqmasdi** — ya'ni huquqni
+     olib tashlash ishlamas, qurilma abadiy kira olaverar edi. Har bir set
+     uchun alohida `flush set` qo'shish orqali tuzatildi va bu holat uchun
+     maxsus regressiya testi (`TestBuildRuleset_RevocationFlushesSetEvenWithNoRemainingElements`)
+     yozildi.
+- **Bilingan cheklovlar:** DDoS himoyasi faqat bitta gateway darajasidagi
+  "aqlli baseline" — haqiqiy distributed hujumga bardosh berish uchun
+  yuqori oqimda (upstream) scrubbing kerak, bu doirasidan tashqarida.
+  `lbd` (Phase 4) hali yo'qligi sababli hozircha `lan_forward`dagi "ruxsat
+  berilgan" trafik biror haqiqiy load-balancing serverga emas, faqat
+  gateway orqali umuman forward qilinishga ruxsat beradi.
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi (`allowed_user`/`allowed_admin` setlar), DDoS baseline qoidalar | `cmd/fwctl/` |
 | Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi, "o'rtadagi server"ga faqat admin guruhidan kirish qoidasi | — |
 | Phase 4 | `lbd` — haqiqiy L4 TCP load balancer, VIP-per-guruh | `cmd/lbd/` |
 | Phase 5 | Backend serverlar metrikasi (agent yoki SNMP/SSH orqali) | — |
@@ -363,11 +431,8 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
 | Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
-**Muhim:** `cmd/fwctl`, `cmd/lbd`, `cmd/capd` papkalari hozircha repo'da yo'q
-(bo'sh papkalar git'da saqlanmaydi) — Phase 2/4/6 boshlanganda yaratiladi.
-Muhim: LAN sahifasida huquq berish hozircha faqat **ma'lumotlar bazasini**
-yangilaydi — `fwctl` (Phase 2) ulanmaguncha bu tarmoq darajasida (nftables)
-hali kuchga kirmaydi.
+**Muhim:** `cmd/lbd`, `cmd/capd` papkalari hozircha repo'da yo'q (bo'sh
+papkalar git'da saqlanmaydi) — Phase 4/6 boshlanganda yaratiladi.
 
 ---
 
@@ -459,12 +524,16 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 ## 12. Keyingi qadam
 
-Phase 1 (`netdiscd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Navbatdagi
-ish — **Phase 2: `fwctl`** (`cmd/fwctl/`): `access_grants` jadvalini
-kuzatib, nftables'da `allowed_user`/`allowed_admin` named set'larini
-sinxronlab turadigan daemon, default-deny siyosati bilan, plus DDoS baseline
-qoidalari (qaror #16: aqlli standart qiymatlar). Bu ulangandan keyin LAN
-sahifasidagi huquq berish birinchi marta **haqiqatan** tarmoq darajasida
-kuchga kiradi (hozircha faqat DB'da saqlanadi — bo'lim 8'dagi eslatmaga
-qarang). Har bosqich tugagach ushbu faylni va `README.md`/`docs/deploy.md`ni
+Phase 1 (`netdiscd`) va Phase 2 (`fwctl`) tayyor va real sinaldi — bo'lim
+8'ga qarang. LAN sahifasida huquq berish endi **haqiqatan** tarmoq
+darajasida (nftables) kuchga kiradi. Navbatdagi ish — **Phase 3: Gateway/
+DHCP/NAT to'liq integratsiyasi**: bu server LAN'ning haqiqiy shlyuzi
+bo'lishi uchun dnsmasq'ni DHCP server sifatida ishga tushirish (hozir
+faqat lease faylini o'qiydi — Phase 1), NAT/masquerade qoidalarini
+qo'shish, va "o'rtadagi server"ga (bu boshqaruv serverining o'zi) faqat
+admin guruhidan kirish qoidasini `fwctl`ning `management_input` zanjiri
+bilan to'liq moslashtirish (portlar hozircha `FWCTL_MANAGEMENT_PORTS`
+orqali qo'lda beriladi — buni haqiqiy API/panel portlariga avtomatik
+moslashtirish kerak bo'lishi mumkin). Har bosqich tugagach ushbu faylni
+va `README.md`/`docs/deploy.md`ni
 yangilab borish tavsiya etiladi.

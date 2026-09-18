@@ -83,6 +83,14 @@ export interface SystemMetric {
   disk_percent: number
 }
 
+export interface FirewallStatus {
+  connected: boolean
+  user_mac_count: number
+  admin_mac_count: number
+  last_applied_at?: string
+  last_error?: string
+}
+
 export interface AuditLog {
   id: number
   actor_admin_id?: number

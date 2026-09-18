@@ -27,8 +27,8 @@ kira olmaydi (default-deny).
 |---|---|---|
 | Phase 0 | DB sxema, auth (JWT+bcrypt+TOTP), RBAC (super_admin/admin), core API, admin panel (7 bo'lim) | ✅ Tayyor |
 | Phase 1 | `netdiscd` — LAN qurilmalarini avtomatik topish (ARP/DHCP/SNMP/hostapd) | ✅ Tayyor |
-| Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi, DDoS himoyasi | ⏳ Keyingi |
-| Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ⏳ |
+| Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi, DDoS himoyasi | ✅ Tayyor |
+| Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ⏳ Keyingi |
 | Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ⏳ |
 | Phase 5 | Backend serverlar metrikasi | ⏳ |
 | Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ |
@@ -38,15 +38,19 @@ Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
 fayli, SNMP (boshqariladigan switch) va hostapd (lokal WiFi) orqali avtomatik
 topib, `devices`/`switch_ports` jadvallariga yozadi (barcha 4 manba real
 sinaldi). LAN sahifasida admin har bir topilgan qurilmaga nickname va
-User/Admin huquq bera oladi — bu huquqni **fwctl** (Phase 2) hali nftables
-darajasida real ta'minlamaydi, faqat ma'lumotlar bazasida saqlanadi va
-Userlar/Adminlar sahifalarida ko'rinadi.
+User/Admin huquq bera oladi, va bu huquq endi **`fwctl` orqali nftables
+darajasida haqiqatan kuchga kiradi**: default-deny, User → faqat load
+balancing (forward), Admin → load balancing + "o'rtadagi server" (input),
+DDoS baseline meter'lari bilan. Butun zanjir (Postgres → aclsync → fwctl →
+nftables → real trafik) `ip netns` orqali qurilgan izolyatsiyalangan
+topologiyada haqiqiy paketlar bilan sinaldi.
 
 ## Loyiha tuzilmasi
 
 ```
 cmd/api/              REST API entrypoint
 cmd/netdiscd/          LAN qurilma topish daemoni (Phase 1) entrypoint
+cmd/fwctl/             nftables ACL enforcement daemoni (Phase 2) entrypoint
 internal/
   config/              Muhit o'zgaruvchilarini o'qish
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
@@ -56,6 +60,8 @@ internal/
   metrics/             Host CPU/RAM/Disk/Net metrikalarini yig'uvchi
   netdisc/              netdiscd'ning kollektorlari (ARP/dnsmasq/SNMP/hostapd) + Unix-socket server
   discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash
+  firewall/             fwctl'ning nftables ruleset generator/apply/manager/socket serveri
+  aclsync/               API tomonida access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
 web/                   React + TypeScript + Vite admin paneli
 deploy/
   docker/              Control-plane uchun Dockerfile'lar va docker-compose.yml

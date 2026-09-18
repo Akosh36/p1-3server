@@ -65,6 +65,8 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/api/audit-logs", s.handleListAuditLogs)
 
+		r.Get("/api/firewall/status", s.handleFirewallStatus)
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSuperAdmin)
 			r.Get("/api/admins", s.handleListAdmins)

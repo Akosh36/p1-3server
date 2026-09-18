@@ -1,0 +1,35 @@
+[Unit]
+Description=p13server fwctl - nftables ACL enforcement daemon
+After=network-online.target
+Wants=network-online.target
+# fwctl must be up before anything else starts routing/forwarding traffic —
+# it applies a deny-all baseline the instant it starts.
+Before=p13server-api.service
+
+[Service]
+Type=simple
+# Needs CAP_NET_ADMIN to load nftables rules. Running as root is the
+# simplest correct option; CAP_NET_ADMIN alone (via AmbientCapabilities)
+# also works if you don't want a root service:
+#   AmbientCapabilities=CAP_NET_ADMIN
+#   User=p13server-fwctl
+ExecStart=/usr/local/bin/fwctl
+Restart=on-failure
+RestartSec=2s
+
+Environment=JWT_SECRET=unused-by-fwctl-but-required-by-shared-config-loader
+Environment=FWCTL_SOCKET=/run/p13server/fwctl.sock
+Environment=FWCTL_TABLE_NAME=p13server
+# Comma-separated TCP ports on THIS host that only admin-MAC traffic may
+# reach (the "o'rtadagi server" — the control-plane API, SSH, ...).
+Environment=FWCTL_MANAGEMENT_PORTS=22,8080
+
+RuntimeDirectory=p13server
+RuntimeDirectoryMode=0770
+
+# On stop/restart, the last-applied ruleset is deliberately left in the
+# kernel (see cmd/fwctl/main.go) — default-deny must survive a crash, not
+# revert to "no rules = allow everything".
+
+[Install]
+WantedBy=multi-user.target

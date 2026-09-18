@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Akosh36/p1-3server/internal/aclsync"
 	"github.com/Akosh36/p1-3server/internal/auth"
 	"github.com/Akosh36/p1-3server/internal/config"
 	"github.com/Akosh36/p1-3server/internal/db"
@@ -58,6 +59,7 @@ func main() {
 
 	go metrics.Run(ctx, pool, 10*time.Second)
 	go discovery.Run(ctx, pool, cfg.NetdiscSocket, 5*time.Second)
+	go aclsync.Run(ctx, pool, cfg.FwctlSocket, 2*time.Second)
 
 	srv := httpapi.New(pool, cfg)
 	httpServer := &http.Server{
