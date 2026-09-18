@@ -204,7 +204,9 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 
 ## 6. Ma'lumotlar bazasi sxemasi
 
-`internal/db/migrations/0001_init.up.sql` — barcha jadvallar:
+`internal/db/migrations/0001_init.up.sql` — barcha jadvallar (Phase 5'da
+`0002_backend_metrics.up.sql` bilan `backend_servers.agent_token` va
+`backend_metrics` jadvali qo'shildi, quyida ko'rsatilgan):
 
 ```
 admins(id, username, password_hash, totp_secret, role[super_admin|admin],
@@ -226,7 +228,8 @@ lan_networks(id, name, type, vpn_peer_id, is_active, is_reachable, last_status_c
 server_groups(id, nickname, color_hex, vip_address, vip_port, protocol,
               algorithm[round_robin|least_conn], is_active, created_at)
 
-backend_servers(id, group_id, ip, port, weight, is_healthy, last_check_at, response_time_ms)
+backend_servers(id, group_id, ip, port, weight, is_healthy, last_check_at, response_time_ms,
+                 agent_token)  -- Phase 5: cmd/backendagentd shu token bilan o'zini tanitadi
 
 traffic_captures(id, device_id, started_by_admin_id, file_path, started_at,
                   stopped_at, size_bytes, status[recording|rotated|downloaded|error],
@@ -238,6 +241,9 @@ audit_logs(id, actor_admin_id, action, target_type, target_id, details JSONB, cr
 system_metrics(time, cpu_percent, mem_percent, disk_read_bps, disk_write_bps,
                 net_in_bps, net_out_bps, disk_percent)
 device_traffic_stats(time, device_id, backend_group_id, bytes_in, bytes_out)
+backend_metrics(time, backend_server_id, cpu_percent, mem_percent, disk_percent,
+                 disk_read_bps, disk_write_bps, net_in_bps, net_out_bps)
+  -- Phase 5: cmd/backendagentd'dan /api/agent/metrics orqali push qilinadi
 ```
 
 Migratsiyalar `internal/db/migrate.go` orqali **avtomatik** ishga tushadi
@@ -252,13 +258,18 @@ cmd/api/main.go          REST API entrypoint (bootstrap super_admin, migratsiya,
 cmd/netdiscd/main.go     netdiscd entrypoint (kollektorlarni ishga tushiradi, socket serveri)
 cmd/fwctl/main.go        fwctl entrypoint (deny-all baseline, socket serveri)
 cmd/lbd/main.go          lbd entrypoint (LBD_INTERFACE talab qiladi, socket serveri)
+cmd/backendagentd/main.go  Backend server metrikasi push-agenti (Phase 5) — gateway'da
+                           EMAS, har bir backend serverda ishlaydi, AGENT_API_URL/
+                           AGENT_TOKEN talab qiladi
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
   models/                 Domen tiplari (Admin, Device, ServerGroup, ...)
   auth/                   JWT, bcrypt, TOTP
   httpapi/                HTTP handlerlar, middleware, router (chi)
-  metrics/                Host CPU/RAM/Disk/Net metrikalarini yig'uvchi (gopsutil)
+  hostmetrics/            CPU/RAM/Disk/Net sampler (gopsutil) — internal/metrics VA
+                           cmd/backendagentd ikkalasi ham shu yerdan foydalanadi
+  metrics/                Gateway'ning o'z host metrikasini yig'uvchi (hostmetrics ustida)
   netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
                            store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
   discovery/              API tomonida: netdiscd snapshot'ini pull qilib Postgres'ga upsert
@@ -284,6 +295,8 @@ deploy/
   systemd/netdiscd.service  netdiscd uchun tayyor unit fayl
   systemd/fwctl.service   fwctl uchun tayyor unit fayl
   systemd/lbd.service     lbd uchun tayyor unit fayl (LBD_INTERFACE sozlanishi kerak)
+  systemd/backendagentd.service  backendagentd uchun tayyor unit fayl (backend serverga
+                          o'rnatiladi, gateway'ga emas — AGENT_API_URL/AGENT_TOKEN kerak)
   dnsmasq/p13server.conf.example  Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiyasi
   nftables/               Bo'sh — nftables qoidalari kod orqali (internal/firewall) generatsiya
                            qilinadi, statik fayl sifatida saqlanmaydi
@@ -572,11 +585,88 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   ravishda (yoki eng kam ulanish bo'yicha) tanlaydi. UDP backend'lar
   qo'llab-quvvatlanmaydi (L4 TCP-only, talabga mos).
 
+### ✅ Phase 5 — tayyor va real sinaldi (haqiqiy Postgres + real brauzer bilan)
+
+- **Qaror (foydalanuvchidan so'ralgan):** backend serverlar metrikasi 3 ta
+  variant orasidan (yengil Go push-agent / SNMP / SSH) **yengil Go
+  push-agent**ni tanladi — loyihaning boshqa hamma joyida ishlatilgan
+  "Go daemon + push" uslubiga mos, backend qanday xizmat/OS ishlatishidan
+  qat'iy nazar ishlaydi.
+- **Arxitektura — bu repo'dagi boshqa hamma daemon'dan farqli:**
+  `cmd/backendagentd` gateway hostida EMAS, load balancing (Phase 4) VIP'i
+  orqasidagi **har bir backend serverning o'zida** ishlaydi. Shu sababli
+  mahalliy Unix-socket emas, tarmoq orqali HTTP bilan control-plane
+  API'ga ulanadi (`AGENT_API_URL`) — netdiscd/fwctl/lbd'dan farqli, chunki
+  ular bilan bir xil host'da control-plane yo'q.
+  - `internal/hostmetrics` (yangi, umumiy paket) — CPU/RAM/disk/tarmoq
+    o'lchash mantig'i (gopsutil) `internal/metrics`dan (gateway'ning o'z
+    "Server" bo'limi) shu yerga ko'chirildi, ikkalasi ham (`cmd/api`ning
+    o'z-metrikasi VA `cmd/backendagentd`) endi shu bitta `Sampler`dan
+    foydalanadi — mantiq ikki marta yozilmagan.
+  - Har bir backend qo'shilganda (`handleAddBackend`) tasodifiy 32-baytli
+    `agent_token` avtomatik yaratiladi (`crypto/rand`) va
+    `backend_servers.agent_token`ga yoziladi — bu login-parol emas,
+    mashina-mashina bearer credential, shuning uchun (JWT_SECRET yoki
+    socket yo'llari kabi) ochiq matnda saqlanadi va Serverlar sahifasida
+    doim ko'rinadi (bcrypt bilan xeshlanmagan — qayta ko'rish/nusxalash
+    kerak bo'ladigan API-kalit, parol emas).
+  - `POST /api/agent/metrics` — `internal/httpapi`da atayin JWT
+    `requireAuth` guruhidan **tashqarida**: chaqiruvchi tizimga kirgan
+    admin emas, tarmoqdagi boshqa mashina, shuning uchun
+    `Authorization: Bearer <agent_token>` to'g'ridan-to'g'ri
+    `backend_servers.agent_token`ga solishtiriladi. Muvaffaqiyatli bo'lsa
+    natija yangi `backend_metrics` jadvaliga yoziladi.
+  - `POST /api/backends/{id}/regenerate-token` — token yo'qolgan/oshkor
+    bo'lgan holatda, backend'ni o'chirib-qayta yaratmasdan (bu uning
+    sog'liq tarixini yo'qotardi) yangi token chiqaradi, eskisi darhol
+    ishlamay qoladi.
+  - `GET /api/backends/{id}/metrics` — Serverlar sahifasining har bir
+    backend qatoridagi "Metrikalar" tugmasi bosilganda ochiladigan
+    kengaytirilgan panel uchun so'nggi N o'lchovni qaytaradi.
+- **Sinov — haqiqiy Postgres + haqiqiy ikkita binary + haqiqiy brauzer:**
+  real `cmd/api` (mahalliy Postgres'ga ulangan) va real `cmd/backendagentd`
+  ishga tushirilib, real API orqali yaratilgan haqiqiy token bilan
+  ulandi — 2 soniyalik intervalda haqiqiy gopsutil o'lchovlari
+  `backend_metrics`ga tushganini ham to'g'ridan-to'g'ri SQL bilan, ham
+  `GET /api/backends/{id}/metrics` orqali tasdiqladi. Autentifikatsiya 3
+  usulda tekshirildi: noto'g'ri token → 401, `Authorization` header'siz →
+  401, `regenerate-token` chaqirilgach eski token darhol 401 bera
+  boshladi (yangi token esa 200) — `cmd/api`ni qayta ishga tushirmasdan.
+  Agent noto'g'ri/bekor qilingan token bilan qulamadi — bir marta
+  ogohlantirib, urinishda davom etdi (aclsync/discovery/lbsync bilan bir
+  xil chidamlilik naqshi). Serverlar sahifasining o'zi **haqiqiy headless
+  brauzerda** (Playwright, `chromium`) tekshirildi: token ko'rinishi va
+  "Nusxalash" tugmasi orqali clipboard'ga to'g'ri nusxalanishi, "Tokenni
+  yangilash" tugmasi tokenni haqiqatan almashtirishi, va agent ishga
+  tushgandan keyin jonli CPU/RAM/Disk grafigi haqiqiy ma'lumot bilan
+  chizilishi — hammasi brauzer konsolida bironta xatosiz.
+- **Shu sinov davomida Phase 4'ning o'zidan qolgan eskirgan ma'lumot
+  bug'i topildi va tuzatildi** (Phase 5 kodining o'z xatosi emas): Phase
+  4'ning `ip netns` sinovi paytida bitta backend qatorining `ip`/`port`i
+  vaqtincha boshqa manzilga o'zgartirilib, keyin asl holatiga
+  qaytarilgan edi, lekin `is_healthy`/`last_check_at`/`response_time_ms`
+  hech qachon tozalanmagan edi — natijada Serverlar sahifasi bu
+  backend'ni hech kim tekshirmagan haqiqiy manzili uchun "Sog'lom" deb
+  ko'rsatib turardi. Aynan Phase 4'ning o'zida qilingan UI tuzatishi
+  ("tekshirilmagan" va "tekshirilib ishlamayapti"ni ajratish) shu holatni
+  yashirmay ko'rinadigan qildi — shu orqali topildi. Uchta ustunni haqiqiy
+  "hali tekshirilmagan" holatiga (`false`/`NULL`/`NULL`) qaytarish bilan
+  tuzatildi.
+- **Bilingan cheklov, hal qilinmagan (yashirilmagan):** `fwctl`ning
+  `management_input` zanjiri (Phase 2) gateway hostidagi boshqaruv
+  portlariga faqat admin-MAC qurilmalarga ruxsat beradi. Agar backend
+  server aynan shu fwctl nazorat qiladigan LAN'da tursa (alohida
+  server/boshqaruv tarmog'ida emas), uning agent push'lari **shu firewall
+  tomonidan jimgina bloklanadi** — MAC'iga admin huquqi berilmasa. Bu
+  muammoni hal qiluvchi alohida "faqat metrika uchun" nftables ruxsati
+  hali yozilmagan; hozircha backend serverlarni fwctl nazorat qilmaydigan
+  tarmoqqa joylashtirish yoki (kelishilgan holda) MAC'iga admin huquqi
+  berish kerak bo'ladi.
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 5 | Backend serverlar metrikasi (agent yoki SNMP/SSH orqali) | — |
 | Phase 6 | `capd` — on-demand pcap yozib olish, rotatsiya, kvota | `cmd/capd/` |
 | Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
@@ -674,16 +764,20 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 ## 12. Keyingi qadam
 
-Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT) va
-Phase 4 (`lbd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Bu server endi
-to'liq ishlaydigan LAN gateway **va** load balancer: DHCP beradi, kirish
-huquqini nazorat qiladi, ruxsat berilganlarni internetga NAT bilan
-chiqaradi, va `lan_forward`dagi ruxsat berilgan trafikni haqiqiy VIP'lar
-orqali orqadagi serverlarga taqsimlaydi. Navbatdagi ish — **Phase 5:
-backend serverlar metrikasi** — hozir `backend_servers` faqat
-`is_healthy`/`response_time_ms` (oddiy TCP-connect probe natijasi)
-saqlaydi; Phase 5 buni CPU/RAM/disk kabi to'liq host metrikasi bilan
-kengaytiradi (agent yoki SNMP/SSH orqali — aniq usul hali qaror
-qilinmagan, ehtimol foydalanuvchidan so'rash kerak). Shundan keyin Phase 6
-(`capd` — on-demand pcap yozib olish) navbatda. Har bosqich tugagach ushbu
-faylni va `README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.
+Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
+Phase 4 (`lbd`) va Phase 5 (`backendagentd`) tayyor va real sinaldi —
+bo'lim 8'ga qarang. Bu server endi to'liq ishlaydigan LAN gateway **va**
+load balancer: DHCP beradi, kirish huquqini nazorat qiladi, ruxsat
+berilganlarni internetga NAT bilan chiqaradi, `lan_forward`dagi ruxsat
+berilgan trafikni haqiqiy VIP'lar orqali orqadagi serverlarga taqsimlaydi,
+va endi har bir backend serverning o'z host metrikasi (CPU/RAM/disk/
+tarmoq) ham ko'rinadi. Navbatdagi ish — **Phase 6: `capd`**
+(`cmd/capd/`) — on-demand pcap yozib olish: admin Userlar sahifasida bitta
+qurilma uchun "Start" bosganda uning trafigini `.pcap` formatida yozib
+boshlaydi (rotatsiya hajm/vaqt bo'yicha, umumiy disk kvotasi bilan — qaror
+#8), fayl Logs bo'limiga tushadi, "Download" bosilganda vaqtincha
+to'xtab, fayl yakunlanib yuklanadi, so'ng yangi faylga yozish davom etadi
+(bo'lim 2.3'dagi Logs talabi). `capd` ham netdiscd/fwctl/lbd kabi
+Postgres'ga bevosita ulanmasligi kerak — `libpcap`/tcpdump asosida, root/
+`CAP_NET_RAW` talab qiladi. Har bosqich tugagach ushbu faylni va
+`README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.

@@ -57,6 +57,18 @@ export interface BackendServer {
   is_healthy: boolean
   last_check_at?: string
   response_time_ms?: number
+  agent_token?: string
+}
+
+export interface BackendMetric {
+  time: string
+  cpu_percent: number
+  mem_percent: number
+  disk_percent: number
+  disk_read_bps: number
+  disk_write_bps: number
+  net_in_bps: number
+  net_out_bps: number
 }
 
 export interface ServerGroup {

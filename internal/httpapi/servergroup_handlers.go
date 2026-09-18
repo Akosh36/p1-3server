@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 
@@ -8,6 +10,19 @@ import (
 
 	"github.com/Akosh36/p1-3server/internal/models"
 )
+
+// generateAgentToken returns a random 32-byte hex string used to
+// authenticate cmd/backendagentd's metric pushes (see handleAgentMetrics) —
+// a bearer credential, not a password, so it's stored and displayed in
+// plaintext for the admin to copy into the agent's config, same as the
+// project's other machine-to-machine secrets (JWT_SECRET, socket paths).
+func generateAgentToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 func (s *Server) handleListServerGroups(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -37,7 +52,7 @@ func (s *Server) handleListServerGroups(w http.ResponseWriter, r *http.Request) 
 
 	if len(groups) > 0 {
 		backendRows, err := s.pool.Query(ctx, `
-			SELECT id, group_id, host(ip), port, weight, is_healthy, last_check_at, response_time_ms
+			SELECT id, group_id, host(ip), port, weight, is_healthy, last_check_at, response_time_ms, agent_token
 			FROM backend_servers ORDER BY group_id, ip, port
 		`)
 		if err != nil {
@@ -47,7 +62,7 @@ func (s *Server) handleListServerGroups(w http.ResponseWriter, r *http.Request) 
 		defer backendRows.Close()
 		for backendRows.Next() {
 			var b models.BackendServer
-			if err := backendRows.Scan(&b.ID, &b.GroupID, &b.IP, &b.Port, &b.Weight, &b.IsHealthy, &b.LastCheckAt, &b.ResponseTimeMs); err != nil {
+			if err := backendRows.Scan(&b.ID, &b.GroupID, &b.IP, &b.Port, &b.Weight, &b.IsHealthy, &b.LastCheckAt, &b.ResponseTimeMs, &b.AgentToken); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to read backend row")
 				return
 			}
@@ -195,14 +210,20 @@ func (s *Server) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 		req.Weight = 1
 	}
 
+	token, err := generateAgentToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate agent token")
+		return
+	}
+
 	ctx := r.Context()
 	claims := claimsFromContext(r)
 
 	var newID int64
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO backend_servers (group_id, ip, port, weight)
-		VALUES ($1, $2, $3, $4) RETURNING id
-	`, groupID, req.IP, req.Port, req.Weight).Scan(&newID)
+		INSERT INTO backend_servers (group_id, ip, port, weight, agent_token)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id
+	`, groupID, req.IP, req.Port, req.Weight, token).Scan(&newID)
 	if err != nil {
 		writeError(w, http.StatusConflict, "backend already exists in this group")
 		return
@@ -212,7 +233,41 @@ func (s *Server) handleAddBackend(w http.ResponseWriter, r *http.Request) {
 		"group_id": groupID, "ip": req.IP, "port": req.Port,
 	})
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"id": newID})
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"id": newID, "agent_token": token})
+}
+
+// handleRegenerateBackendToken issues a fresh agent_token for a backend,
+// invalidating the old one — for a lost/leaked token, without having to
+// delete and recreate the backend row (which would also drop its health
+// history and require re-adding it to the group).
+func (s *Server) handleRegenerateBackendToken(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid backend id")
+		return
+	}
+
+	token, err := generateAgentToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate agent token")
+		return
+	}
+
+	ctx := r.Context()
+	claims := claimsFromContext(r)
+
+	tag, err := s.pool.Exec(ctx, `UPDATE backend_servers SET agent_token = $1 WHERE id = $2`, token, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to regenerate agent token")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "backend not found")
+		return
+	}
+
+	_ = s.recordAudit(ctx, claims, "backend.regenerate_token", "backend_server", &id, nil)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"agent_token": token})
 }
 
 func (s *Server) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {

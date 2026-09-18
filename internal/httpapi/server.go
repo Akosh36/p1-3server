@@ -40,6 +40,11 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Post("/api/auth/login", s.handleLogin)
 
+	// Phase 5: cmd/backendagentd runs on a backend server, not as a logged-in
+	// admin, so it authenticates with a per-backend agent_token (checked
+	// inside the handler) instead of the JWT requireAuth group below.
+	r.Post("/api/agent/metrics", s.handleAgentMetrics)
+
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
 
@@ -59,6 +64,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/server-groups/{id}", s.handleDeleteServerGroup)
 		r.Post("/api/server-groups/{id}/backends", s.handleAddBackend)
 		r.Delete("/api/backends/{id}", s.handleDeleteBackend)
+		r.Post("/api/backends/{id}/regenerate-token", s.handleRegenerateBackendToken)
+		r.Get("/api/backends/{id}/metrics", s.handleBackendMetricsHistory)
 
 		r.Get("/api/metrics/self", s.handleSelfMetrics)
 		r.Get("/api/metrics/history", s.handleMetricsHistory)

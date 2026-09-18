@@ -137,6 +137,21 @@ type BackendServer struct {
 	IsHealthy      bool       `json:"is_healthy"`
 	LastCheckAt    *time.Time `json:"last_check_at,omitempty"`
 	ResponseTimeMs *float64   `json:"response_time_ms,omitempty"`
+	AgentToken     *string    `json:"agent_token,omitempty"`
+}
+
+// BackendMetric is one host-metrics sample pushed by cmd/backendagentd
+// running on a backend server (Phase 5) — CPU/RAM/disk/network, same shape
+// as SystemMetric but per-backend instead of for the gateway itself.
+type BackendMetric struct {
+	Time         time.Time `json:"time"`
+	CPUPercent   float64   `json:"cpu_percent"`
+	MemPercent   float64   `json:"mem_percent"`
+	DiskPercent  float64   `json:"disk_percent"`
+	DiskReadBps  int64     `json:"disk_read_bps"`
+	DiskWriteBps int64     `json:"disk_write_bps"`
+	NetInBps     int64     `json:"net_in_bps"`
+	NetOutBps    int64     `json:"net_out_bps"`
 }
 
 type TrafficCapture struct {

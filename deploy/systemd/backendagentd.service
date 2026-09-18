@@ -1,0 +1,28 @@
+[Unit]
+Description=p13server backendagentd - backend host metrics push-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Unlike every other unit in this directory, this one is NOT installed on
+# this platform's gateway host — copy it onto each BACKEND server sitting
+# behind a load-balancing VIP (Phase 4) instead. It needs no special
+# capability: it only reads its own host's CPU/RAM/disk/network counters
+# (gopsutil, read-only) and POSTs them over HTTPS/HTTP to the control-plane
+# API, so a normal unprivileged user is fine.
+ExecStart=/usr/local/bin/backendagentd
+Restart=on-failure
+RestartSec=5s
+DynamicUser=yes
+
+# The control-plane API's reachable address (same one lbd's group config
+# points backend IPs at, seen from the API's side instead) and the
+# per-backend token shown in the Servers page's "Metrikalar" panel when the
+# backend was added (or regenerated there if lost).
+Environment=AGENT_API_URL=http://gateway.example.lan:8080
+Environment=AGENT_TOKEN=REPLACE_WITH_TOKEN_FROM_SERVERS_PAGE
+#Environment=AGENT_INTERVAL=10s
+
+[Install]
+WantedBy=multi-user.target

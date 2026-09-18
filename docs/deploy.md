@@ -243,6 +243,90 @@ goroutines derive from, while the request-scoped context is still used for
 the synchronous `ip addr add/del` calls that need to finish before `/sync`
 responds.
 
+### backendagentd (Phase 5 — shipped)
+
+Real CPU/RAM/disk/network metrics for each **backend** server sitting
+behind a Phase 4 VIP — not the gateway itself (that's `internal/metrics`,
+Phase 0's "Server" card). This is the one component in this repo that does
+**not** run on this platform's own gateway host: it's a tiny agent binary
+installed on each backend server, wherever that server actually lives, and
+it reaches the control-plane API over the network instead of a local Unix
+socket (there is no local socket to share — it isn't on the same machine).
+
+```bash
+# On the BACKEND server itself, not the gateway:
+go build -o /usr/local/bin/backendagentd ./cmd/backendagentd
+sudo cp deploy/systemd/backendagentd.service /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/backendagentd.service   # set AGENT_API_URL
+                                                           # and AGENT_TOKEN
+sudo systemctl daemon-reload
+sudo systemctl enable --now backendagentd
+```
+
+`AGENT_TOKEN` comes from the Servers page: adding a backend now generates a
+random per-backend token automatically (shown once in the create response,
+always visible afterward under that backend's "Metrikalar" panel, with a
+"Tokenni yangilash" button to rotate it if it's lost or leaked — rotating
+doesn't require deleting/recreating the backend, so its health history
+survives).
+
+Every `AGENT_INTERVAL` (default 10s) the agent samples its own host via
+`internal/hostmetrics` (the same gopsutil-based sampler `internal/metrics`
+uses for the gateway's own numbers — extracted into a shared package in
+this phase so the logic is written once) and `POST`s the sample to
+`/api/agent/metrics`, authenticated with `Authorization: Bearer
+<agent_token>`. That endpoint is deliberately outside the JWT `requireAuth`
+group in `internal/httpapi/server.go` — the caller is a machine on a
+backend server, not a logged-in admin — and resolves the token straight
+against `backend_servers.agent_token` before writing into the new
+`backend_metrics` time-series table. A wrong or revoked token gets a plain
+401; the agent logs one warning and keeps retrying rather than crashing
+(same resilience pattern as `aclsync`/`discovery`/`lbsync` when their
+daemon is unreachable).
+
+**Verified end-to-end against a real local Postgres, not mocked:** a real
+`cmd/api` process, a real `cmd/backendagentd` binary pointed at it with a
+token minted through the real create-backend API call, pushing real
+`gopsutil` samples every 2s that landed in `backend_metrics` and were
+readable back through `GET /api/backends/{id}/metrics` — confirmed by
+direct SQL query as well as the API response. Auth was verified three ways:
+a wrong token and a missing `Authorization` header both got 401; hitting
+`POST /backends/{id}/regenerate-token` immediately invalidated the old
+token (401) while the new one started working (200) without restarting
+`cmd/api`. The Servers page itself was checked in a real headless browser
+(Playwright): the token displays and copies to the clipboard correctly,
+"Tokenni yangilash" visibly rotates it, and the per-backend chart renders
+real, live CPU/RAM/Disk lines once the agent is running — with an explicit
+empty-state message (not a blank chart) for a backend that has no agent
+pushing to it yet. Zero browser console errors throughout.
+
+This same testing pass caught a **stale-data bug left over from Phase 4's
+own manual testing**, not a Phase 5 code bug: a backend row's
+`ip`/`port` had been temporarily repointed at a throwaway `ip netns`
+target during Phase 4's `ip netns` validation and restored afterward, but
+`is_healthy`/`last_check_at`/`response_time_ms` were never reset —
+so the Servers page kept showing that backend as "Sog'lom" (healthy) with
+a real-looking response time for an address nothing had actually checked
+since. Phase 4's own UI fix (distinguishing "never checked" from "checked
+and down") made this visible rather than hiding it, which is how it was
+caught here; fixed by resetting those three columns to their true
+never-checked state (`false`/`NULL`/`NULL`).
+
+**Known limitation, not yet solved — flagged honestly rather than glossed
+over:** `fwctl`'s `management_input` chain (Phase 2) restricts inbound
+traffic to `FWCTL_MANAGEMENT_PORTS` on the gateway host to admin-MAC
+devices only. If a backend server lives on the same LAN this gateway
+firewalls (rather than on a separate server/management network, or reached
+through a route that bypasses `lan_forward` entirely), its agent's pushes
+to the control-plane API will be **silently dropped by that same firewall**
+unless its MAC is admin-granted — which is not an access level a load-balanced
+backend server should need just to report its own metrics. There is no
+dedicated "metrics ingestion" allowance separate from the admin-MAC
+management ports yet; for now, either place backend servers outside the
+LAN segment `fwctl` controls, or grant the backend's MAC admin access as a
+workaround, both with their own trade-offs. A proper fix (e.g. a narrower,
+metrics-only nftables allowance) is future work, not part of this phase.
+
 ### Still not shipped: capd (Phase 6)
 
 Adds:

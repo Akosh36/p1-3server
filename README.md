@@ -30,8 +30,8 @@ kira olmaydi (default-deny).
 | Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi, DDoS himoyasi | ✅ Tayyor |
 | Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ✅ Tayyor |
 | Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ✅ Tayyor |
-| Phase 5 | Backend serverlar metrikasi | ⏳ Keyingi |
-| Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ |
+| Phase 5 | `backendagentd` — backend serverlar metrikasi (push-agent) | ✅ Tayyor |
+| Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ Keyingi |
 | Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
@@ -68,6 +68,21 @@ qarab tanlashi, guruhni o'chirish/DB orqali faolsizlantirish VIP'ni to'g'ri
 bo'shatishi, va butun boshqaruv zanjiri (real Postgres → API → lbd → orqaga
 Postgres) uchtan-uchgacha tasdiqlandi.
 
+Endi har bir backend serverning haqiqiy host metrikasi (CPU/RAM/disk/tarmoq)
+ham ko'rinadi: `backendagentd` — gateway'da emas, **backend serverning
+o'zida** ishlaydigan kichik agent — o'z hostini o'lchab, control-plane
+API'ga tarmoq orqali push qiladi (`internal/hostmetrics`, Server bo'limi
+ishlatgan o'sha gopsutil sampler'ining qayta ishlatilgan versiyasi). Har bir
+backend qo'shilganda avtomatik tasodifiy token yaratiladi (Serverlar
+sahifasida ko'rinadi, kerak bo'lsa yangilanadi) — agent shu token bilan
+`/api/agent/metrics`ga autentifikatsiya qiladi, JWT emas (bu chaqiruvchi
+tizimga kirgan admin emas, tarmoqdagi boshqa mashina). Real Postgres + real
+`cmd/api` + real `cmd/backendagentd` bilan uchtan-uchgacha sinaldi: haqiqiy
+metrikalar bazaga tushdi, noto'g'ri/eskirgan token 401 bilan rad etildi,
+tokenni yangilash eskisini darhol ishlamay qo'ydi, va Serverlar sahifasida
+(haqiqiy brauzerda, Playwright orqali) token nusxalash va jonli
+CPU/RAM/Disk grafigi konsolda xatosiz ishlashi tasdiqlandi.
+
 ## Loyiha tuzilmasi
 
 ```
@@ -75,13 +90,17 @@ cmd/api/              REST API entrypoint
 cmd/netdiscd/          LAN qurilma topish daemoni (Phase 1) entrypoint
 cmd/fwctl/             nftables ACL enforcement daemoni (Phase 2) entrypoint
 cmd/lbd/               L4 load balancer daemoni (Phase 4) entrypoint
+cmd/backendagentd/     Backend server metrikasi push-agenti (Phase 5) entrypoint —
+                       gateway'da emas, har bir backend serverda ishlaydi
 internal/
   config/              Muhit o'zgaruvchilarini o'qish
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
   models/              Domen tiplari
   auth/                JWT, bcrypt, TOTP
   httpapi/             HTTP handlerlar, middleware, router
-  metrics/             Host CPU/RAM/Disk/Net metrikalarini yig'uvchi
+  hostmetrics/          CPU/RAM/Disk/Net sampler (gopsutil) — metrics VA backendagentd
+                        ikkalasi ham shu yerdan foydalanadi
+  metrics/             Gateway'ning o'z host metrikasini yig'uvchi (hostmetrics ustida)
   netdisc/              netdiscd'ning kollektorlari (ARP/dnsmasq/SNMP/hostapd) + Unix-socket server
   discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash
   firewall/             fwctl'ning nftables ruleset generator/apply/manager/socket serveri
