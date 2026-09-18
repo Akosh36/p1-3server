@@ -172,15 +172,86 @@ namespace's own interface MAC to match a granted admin's MAC and
 confirming management access was still refused — proving the `iifname`
 guard, not just the MAC set, is what's stopping it.
 
-### Still not shipped: lbd (Phase 4), capd (Phase 6)
+### lbd (Phase 4 — shipped)
 
-Each adds:
+Real L4 TCP load balancing per server group, on top of everything above:
+traffic that `lan_forward` (Phase 2) already allows through can now
+actually reach a group's VIP and get proxied to a real backend, instead of
+hitting a dead address.
 
-1. The Go binary under `cmd/<name>`.
-2. A systemd unit in `deploy/systemd/<name>.service` (runs as `root`, or the
+```bash
+go build -o /usr/local/bin/lbd ./cmd/lbd
+sudo cp deploy/systemd/lbd.service /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/lbd.service   # set LBD_INTERFACE to your LAN interface
+sudo systemctl daemon-reload
+sudo systemctl enable --now lbd
+```
+
+Like netdiscd and fwctl, lbd has no database access. Each VIP is a real
+`/32` secondary address added directly to `LBD_INTERFACE` (`internal/lb/vip.go`,
+`ip addr add <vip>/32 dev <iface>`) — a deliberate choice over a separate
+dummy interface, so the kernel answers ARP for it exactly like any other
+locally-owned address and LAN clients reach it like a normal host on the
+subnet. lbd then binds a real `net.Listener` on `<vip>:<port>` and proxies
+each accepted connection to a backend chosen by the group's algorithm
+(`round_robin` or `least_conn`), health-checked every 3s with a plain TCP
+connect probe (protocol-agnostic — works for HTTP, a game server, anything
+that accepts TCP) and a 2-consecutive-failure/1-success flap-avoidance
+threshold before a backend is pulled from or returned to rotation.
+
+`cmd/api`'s `internal/lbsync.Run` is the only thing that ever talks to
+Postgres for this: every ~3s it reads `server_groups`/`backend_servers`
+(only `is_active = true` groups), pushes the desired VIP/backend list to
+lbd's `/sync` endpoint over `/run/p13server/lbd.sock`, then pulls lbd's
+`/status` endpoint and writes `is_healthy`/`last_check_at`/`response_time_ms`
+back onto each `backend_servers` row — the same push/pull-over-Unix-socket
+shape as `internal/aclsync` (fwctl) and `internal/discovery` (netdiscd).
+
+**Verified with real traffic in a 4-namespace topology** (`lan` client ↔
+`gw` running the real lbd ↔ `backend1`/`backend2`, each a real
+`python3 -m http.server`): confirmed ARP resolves the VIP to the gateway
+(`ip neigh show` → `REACHABLE`), then 6 sequential real `curl`s alternated
+perfectly `BACKEND1-OK`/`BACKEND2-OK` under `round_robin`. Killing
+backend1's process was picked up by the health check within two 3s ticks
+(`GET /status` showed `is_healthy: false`), and live client traffic during
+that window — not just the recorded health state — went to `BACKEND2-OK`
+on all 6 requests; restarting backend1 rejoined it to the rotation on the
+next successful probe. `least_conn` was verified by holding open several
+raw TCP connections and confirming each new connection always went to
+whichever backend currently had fewer active connections (`0-0 → 1-0 → 1-1
+→ 2-1 → 2-2`, never lopsided). Removing a group (or setting
+`is_active = false` in Postgres and waiting for the next `lbsync` tick) was
+confirmed to release the VIP address and close the listener; the full
+control-plane loop was also verified against a real local Postgres — real
+`server_groups`/`backend_servers` rows, a real `cmd/api` process, its
+`lbsync` push reaching a real lbd and its health pull landing back in the
+same rows — including flipping `is_active` in the database and watching
+the VIP start/stop accordingly with no direct Postgres access from lbd
+itself.
+
+That testing caught one real concurrency bug, now a load-bearing comment in
+`internal/lb/manager.go`: a VIP listener and its health-check loop are
+started inside `Manager.Sync`, which is called from the `/sync` HTTP
+handler with `r.Context()`. Go's `net/http` cancels that context the
+instant the HTTP response finishes writing — deriving the listener's
+lifetime from it meant **every VIP closed itself immediately after each
+successful sync**, which looked fine at the HTTP-response and `ip addr
+show` level (200 OK, VIP address present, ARP resolving) but left no
+listener at all behind it. Fixed by giving `Manager` a separate
+daemon-lifetime `baseCtx` (set once at startup) that listener/health-check
+goroutines derive from, while the request-scoped context is still used for
+the synchronous `ip addr add/del` calls that need to finish before `/sync`
+responds.
+
+### Still not shipped: capd (Phase 6)
+
+Adds:
+
+1. The Go binary under `cmd/capd`.
+2. A systemd unit in `deploy/systemd/capd.service` (runs as `root`, or the
    minimum capability set the daemon actually needs — documented in that
    unit file).
-3. Whatever OS package it orchestrates (`wireguard-tools`).
+3. Whatever OS package it orchestrates (`tcpdump`/`libpcap`).
 
 ## Local development (no Docker)
 

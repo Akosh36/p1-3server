@@ -251,6 +251,7 @@ Migratsiyalar `internal/db/migrate.go` orqali **avtomatik** ishga tushadi
 cmd/api/main.go          REST API entrypoint (bootstrap super_admin, migratsiya, HTTP server)
 cmd/netdiscd/main.go     netdiscd entrypoint (kollektorlarni ishga tushiradi, socket serveri)
 cmd/fwctl/main.go        fwctl entrypoint (deny-all baseline, socket serveri)
+cmd/lbd/main.go          lbd entrypoint (LBD_INTERFACE talab qiladi, socket serveri)
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
@@ -265,6 +266,13 @@ internal/
                            shu yerda), apply.go (nft -f chaqiradi), gateway.go (ip_forward yoqadi),
                            manager.go (state + serialize), server.go (Unix-socket)
   aclsync/                API tomonida: access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
+  lb/                     lbd: types.go (Backend/Group/Status), vip.go (ip addr add/del /32),
+                           pool.go (backendState + round_robin/least_conn tanlash), healthcheck.go
+                           (davriy TCP-connect probe), proxy.go (accept loop + bidirectional
+                           io.Copy), manager.go (VIP'lar bo'yicha reconcile + Sync/Status),
+                           server.go (Unix-socket: /sync, /status)
+  lbsync/                 API tomonida: server_groups/backend_servers'ni Postgres'dan o'qib
+                           lbd'ga push qiluvchi, sog'liqni orqaga yozuvchi
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
   src/context/            AuthContext (JWT holati)
@@ -275,6 +283,7 @@ deploy/
   docker/                 api.Dockerfile, web.Dockerfile, docker-compose.yml (control-plane)
   systemd/netdiscd.service  netdiscd uchun tayyor unit fayl
   systemd/fwctl.service   fwctl uchun tayyor unit fayl
+  systemd/lbd.service     lbd uchun tayyor unit fayl (LBD_INTERFACE sozlanishi kerak)
   dnsmasq/p13server.conf.example  Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiyasi
   nftables/               Bo'sh — nftables qoidalari kod orqali (internal/firewall) generatsiya
                            qilinadi, statik fayl sifatida saqlanmaydi
@@ -468,18 +477,112 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   ko'rib chiqilmadi — odatda bitta dnsmasq bir nechta interfeysga xizmat
   qila oladi, konfiguratsiya namunasida eslatilgan.
 
+### ✅ Phase 4 — tayyor va real sinaldi (haqiqiy L4 TCP load balancer + `ip netns`)
+
+- **Arxitektura** (`internal/lb/`): `Manager` — bir host'da ishlayotgan
+  barcha VIP'larni boshqaradi, `netdisc.Store`/`firewall.Manager` kabi
+  hech qachon Postgres'ga ulanmaydi. Har bir guruh uchun:
+  - `vip.go` — VIP manzilini alohida dummy interfeys emas, `LBD_INTERFACE`
+    (LAN interfeysi)ga `/32` ikkilamchi manzil sifatida qo'shadi
+    (`ip addr add <vip>/32 dev <iface>`) — qaror: kernel bu manzil uchun
+    ARP'ga oddiy host kabi javob beradi, LAN mijozlari uni tarmoqdagi
+    boshqa har qanday host kabi ko'radi.
+  - `proxy.go` — `net.Listen("tcp", vip:port)`, har bir qabul qilingan
+    ulanish uchun backend tanlanadi va ikkala tomonlama `io.Copy` bilan
+    proksi qilinadi (L4, protokolga bog'liq emas).
+  - `pool.go` — `round_robin` (atomik counter) va `least_conn` (eng kam
+    faol ulanishli backend'ni skanerlash) tanlash algoritmlari,
+    2-ketma-ket-xato/1-muvaffaqiyat flap-oldini olish chegarasi bilan.
+  - `healthcheck.go` — har 3 soniyada oddiy TCP-connect probe (HTTP shart
+    emas — "istalgan turdagi server" talabiga mos, protokolga bog'liq
+    bo'lmagan tekshiruv).
+  - `manager.go` — `Sync(groups)` xohlangan holatni joriy holat bilan
+    solishtiradi: yangi guruhlarga VIP+listener ochadi, o'chganlarga
+    VIP'ni bo'shatadi, o'zgarganlarga esa `backendState`ni addr bo'yicha
+    qayta ishlatib (health/ulanish tarixini yo'qotmasdan) pool'ni
+    almashtiradi.
+  - `server.go` — Unix-socket: `POST /sync` (xohlangan guruhlar),
+    `GET /status` (har bir backend'ning `is_healthy`/`response_time_ms`/
+    `active_conns`'i).
+- **Control-plane** (`internal/lbsync/`) — `aclsync`/`discovery` bilan bir
+  xil naqsh: har ~3s `server_groups`(`is_active = true`)/`backend_servers`ni
+  o'qib lbd'ga `/sync` orqali push qiladi, `/status`ni pull qilib
+  `backend_servers.is_healthy`/`last_check_at`/`response_time_ms`ga
+  yozadi. lbd ishlamasa — bir marta ogohlantirib, urinishda davom etadi
+  (API'ni yiqitmaydi).
+- **Topilgan haqiqiy bag** (endi `internal/lb/manager.go`da yuklama
+  ko'taruvchi izoh): `Manager.startLocked` VIP listener va health-check
+  goroutine'larining umrini `Sync(ctx, ...)`ning `ctx` parametridan olar
+  edi. `ServeControl`ning `/sync` handleri `m.Sync(r.Context(), ...)`
+  chaqiradi, `net/http` esa HTTP javobi yozilgan zahoti `r.Context()`ni
+  bekor qiladi — natijada **har bir muvaffaqiyatli sync'dan keyin VIP
+  listener darhol o'zini yopib qo'yar edi**. Simptom: `/sync` 200
+  qaytaradi, `ip addr show` VIP manzilini to'g'ri ko'rsatadi, ARP VIP'ni
+  gateway MAC'iga to'g'ri hal qiladi (`ip neigh show` → `REACHABLE`), lekin
+  `ss -tln` portda **hech qanday listener yo'qligini** ko'rsatadi va
+  `curl` "connection refused" beradi. Tuzatish: `Manager`ga alohida,
+  daemon umri bilan yashaydigan `baseCtx` maydoni qo'shildi
+  (`NewManager(iface, baseCtx)`, `cmd/lbd/main.go`da `signal.NotifyContext`
+  natijasi beriladi); listener/health-check goroutine'lari endi shu
+  `baseCtx`dan, sync chaqiruvining request-scoped `ctx`sidan emas,
+  hosil qilinadi (u faqat sinxron `ip addr add/del` chaqiruvlari uchun
+  ishlatiladi).
+- **Sinov — 4-tugunli `ip netns` topologiyasi** (`lan` mijoz ↔ `gw`
+  haqiqiy `lbd` bilan ↔ `backend1`/`backend2`, har biri haqiqiy
+  `python3 -m http.server`):
+  1. VIP `10.0.1.100:80`, `round_robin`, backend'lar `10.0.2.2:80` va
+     `10.0.3.2:80` bilan sync qilindi. ARP: `ip neigh show` → `REACHABLE`.
+     6 ketma-ket haqiqiy `curl` so'rovi mukammal almashdi:
+     `BACKEND1-OK/BACKEND2-OK` × 3.
+  2. `backend1`ning http.server jarayoni o'chirildi. ~2 health-check
+     tsiklidan (6s) so'ng `GET /status` uni `is_healthy: false` deb
+     ko'rsatdi. **Muhimi** — bu faqat yozilgan holat emasligini
+     tasdiqlash uchun yashab turgan listener orqali yana 6 ta haqiqiy
+     `curl` yuborildi: barcha 6tasi ham faqat `BACKEND2-OK` qaytardi —
+     ya'ni `pool.pick()` haqiqatan ham nosog'lom backend'ni jonli
+     trafikdan chetlashtiradi, shunchaki holatni yozib qo'yib qolmaydi.
+  3. `backend1` qayta ishga tushirildi, keyingi muvaffaqiyatli probe'dan
+     so'ng `GET /status` uni yana `is_healthy: true` qildi, va jonli
+     trafik yana `BACKEND1-OK/BACKEND2-OK` almashinishiga qaytdi.
+  4. Guruh o'chirildi (`{"groups": []}` sync) — VIP manzili
+     (`ip addr show`) va listener (`ss -tln`) ikkalasi ham yo'qoldi, mijoz
+     endi ulana olmadi (`connection refused`).
+  5. `least_conn`: guruh qayta `least_conn` bilan ochilib, 4 ta uzoq
+     ulanish (`exec 3<>/dev/tcp/vip/80`) ketma-ket ochildi va har birida
+     `GET /status`dagi `active_conns` tekshirildi: `1-0 → 1-1 → 2-1 →
+     2-2` — har doim eng kam yuklangan backend tanlandi, hech qachon
+     tengsiz taqsimlanmadi.
+  6. **Butun boshqaruv zanjiri haqiqiy Postgres bilan**: `server_groups`/
+     `backend_servers`ga haqiqiy qatorlar yozildi, haqiqiy `cmd/api`
+     ishga tushirildi (`internal/lbsync.Run` bilan), va u avtomatik lbd'ga
+     push qilib, `backend_servers.is_healthy`/`last_check_at`/
+     `response_time_ms`ni orqaga yozganini tasdiqladi. `is_active = false`
+     qo'yilganda keyingi tsiklda VIP o'chdi, qayta `true` qilinganda
+     qayta ochildi va trafik xizmat qila boshladi — lbd'ning o'zi hech
+     qachon Postgres'ga tegmadi.
+- **UI bo'shlig'i topildi va tuzatildi:** `ServersPage.tsx` `is_healthy`ni
+  ko'rsatardi, lekin `false`ni "hali tekshirilmagan" va "tekshirilib,
+  ishlamayapti" holatlaridan ajrata olmasdi (ikkalasi ham bir xil kulrang
+  "○ Tekshirilmagan" bilan chizilardi) — Phase 4dan keyin bu farq endi
+  haqiqiy va muhim. `last_check_at`ning borligiga qarab uch holatga
+  bo'lindi: hali tekshirilmagan (kulrang), sog'lom (yashil), ishlamayapti
+  (qizil) — va `response_time_ms` ustuni qo'shildi.
+- **Bilingan cheklovlar:** vazn (`weight`) hozircha faqat saqlanadi va
+  ko'rsatiladi — tanlash algoritmlari hali og'irlik bo'yicha emas, teng
+  ravishda (yoki eng kam ulanish bo'yicha) tanlaydi. UDP backend'lar
+  qo'llab-quvvatlanmaydi (L4 TCP-only, talabga mos).
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 4 | `lbd` — haqiqiy L4 TCP load balancer, VIP-per-guruh | `cmd/lbd/` |
 | Phase 5 | Backend serverlar metrikasi (agent yoki SNMP/SSH orqali) | — |
 | Phase 6 | `capd` — on-demand pcap yozib olish, rotatsiya, kvota | `cmd/capd/` |
 | Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
-**Muhim:** `cmd/lbd`, `cmd/capd` papkalari hozircha repo'da yo'q (bo'sh
-papkalar git'da saqlanmaydi) — Phase 4/6 boshlanganda yaratiladi.
+**Muhim:** `cmd/capd` papkasi hozircha repo'da yo'q (bo'sh papkalar
+git'da saqlanmaydi) — Phase 6 boshlanganda yaratiladi.
 
 ---
 
@@ -571,20 +674,16 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 ## 12. Keyingi qadam
 
-Phase 1 (`netdiscd`), Phase 2 (`fwctl`) va Phase 3 (Gateway/DHCP/NAT)
-tayyor va real sinaldi — bo'lim 8'ga qarang. Bu server endi to'liq
-ishlaydigan LAN gateway: DHCP beradi, kirish huquqini nazorat qiladi,
-ruxsat berilganlarni internetga NAT bilan chiqaradi. Navbatdagi ish —
-**Phase 4: `lbd`** (`cmd/lbd/`) — haqiqiy L4 TCP load balancer: `server_groups`/
-`backend_servers` jadvalidagi guruhlarni o'qib, har biriga alohida VIP
-(`server_groups.vip_address`) ochib beradigan, round-robin/least-conn
-bilan orqadagi serverlarga trafik taqsimlaydigan daemon. Bu ulangandan
-keyin `lan_forward`dagi "ruxsat berilgan" trafik nihoyat haqiqiy
-load-balancing serverlarga borishi mumkin bo'ladi (hozircha faqat
-gateway orqali umuman forward qilishga ruxsat beriladi — bo'lim 8'dagi
-Phase 2 eslatmasiga qarang). `lbd` ham netdiscd/fwctl kabi Postgres'ga
-ulanmasligi kerak — control-plane (`internal/`) unga guruh/backend
-holatini socket orqali push qilishi, `lbd` esa health-check natijalarini
-(backend_servers.is_healthy) API orqali qaytarib berishi tabiiy davom
-etadigan naqsh bo'ladi. Har bosqich tugagach ushbu faylni va
-`README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.
+Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT) va
+Phase 4 (`lbd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Bu server endi
+to'liq ishlaydigan LAN gateway **va** load balancer: DHCP beradi, kirish
+huquqini nazorat qiladi, ruxsat berilganlarni internetga NAT bilan
+chiqaradi, va `lan_forward`dagi ruxsat berilgan trafikni haqiqiy VIP'lar
+orqali orqadagi serverlarga taqsimlaydi. Navbatdagi ish — **Phase 5:
+backend serverlar metrikasi** — hozir `backend_servers` faqat
+`is_healthy`/`response_time_ms` (oddiy TCP-connect probe natijasi)
+saqlaydi; Phase 5 buni CPU/RAM/disk kabi to'liq host metrikasi bilan
+kengaytiradi (agent yoki SNMP/SSH orqali — aniq usul hali qaror
+qilinmagan, ehtimol foydalanuvchidan so'rash kerak). Shundan keyin Phase 6
+(`capd` — on-demand pcap yozib olish) navbatda. Har bosqich tugagach ushbu
+faylni va `README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.

@@ -93,6 +93,21 @@ function CreateGroupForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
+// lbd (Phase 4) writes real last_check_at/is_healthy back via lbsync, so
+// "never checked" (no lbd sync has happened yet, e.g. right after adding a
+// backend or while lbd is down) and "checked and currently failing" are
+// distinguishable states, not both just "false" — showing them the same
+// would make a real outage look identical to a lbd that hasn't run yet.
+function BackendHealthBadge({ backend }: { backend: import('../api/types').BackendServer }) {
+  if (!backend.last_check_at) {
+    return <span style={{ color: 'var(--text-muted)' }}>○ Tekshirilmagan</span>
+  }
+  if (backend.is_healthy) {
+    return <span style={{ color: 'var(--success)' }}>● Sog'lom</span>
+  }
+  return <span style={{ color: 'var(--danger)' }}>● Ishlamayapti</span>
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -153,6 +168,7 @@ function GroupCard({ group, onChanged }: { group: ServerGroup; onChanged: () => 
               <th className="pb-2 font-medium">IP:Port</th>
               <th className="pb-2 font-medium">Weight</th>
               <th className="pb-2 font-medium">Holat</th>
+              <th className="pb-2 font-medium">Javob vaqti</th>
               <th className="pb-2"></th>
             </tr>
           </thead>
@@ -166,9 +182,10 @@ function GroupCard({ group, onChanged }: { group: ServerGroup; onChanged: () => 
                   {b.weight}
                 </td>
                 <td className="py-2">
-                  <span style={{ color: b.is_healthy ? 'var(--success)' : 'var(--text-muted)' }}>
-                    {b.is_healthy ? '● Sog\'lom' : '○ Tekshirilmagan'}
-                  </span>
+                  <BackendHealthBadge backend={b} />
+                </td>
+                <td className="py-2" style={{ color: 'var(--text-muted)' }}>
+                  {b.last_check_at && b.response_time_ms != null ? `${b.response_time_ms.toFixed(1)} ms` : '—'}
                 </td>
                 <td className="py-2 text-right">
                   <button onClick={() => removeBackend(b.id)} className="text-xs" style={{ color: 'var(--danger)' }}>

@@ -1,0 +1,38 @@
+[Unit]
+Description=p13server lbd - L4 TCP load balancer daemon
+After=network-online.target fwctl.service
+Wants=network-online.target
+# Not ordered strictly After=fwctl.service by requirement, only by
+# convenience: VIPs are only reachable from the LAN once fwctl's forward
+# rules allow the traffic through, so starting lbd first just means clients
+# see "connection refused" a little longer during boot, not a security gap.
+
+[Service]
+Type=simple
+# Binds real listeners on VIP addresses added to LBD_INTERFACE (see
+# internal/lb/vip.go) — needs CAP_NET_ADMIN for the `ip addr add/del ... /32`
+# calls. Running as root is the simplest correct option; CAP_NET_ADMIN alone
+# (via AmbientCapabilities) also works if you don't want a root service:
+#   AmbientCapabilities=CAP_NET_ADMIN
+#   User=p13server-lbd
+ExecStart=/usr/local/bin/lbd
+Restart=on-failure
+RestartSec=2s
+
+Environment=JWT_SECRET=unused-by-lbd-but-required-by-shared-config-loader
+Environment=LBD_SOCKET=/run/p13server/lbd.sock
+# The LAN-facing interface VIPs are added to as /32 secondary addresses —
+# same interface fwctl treats as the LAN side. Required; lbd refuses to
+# start without it.
+Environment=LBD_INTERFACE=eth0
+
+RuntimeDirectory=p13server
+RuntimeDirectoryMode=0770
+
+# On stop/restart, VIP addresses added to LBD_INTERFACE are released
+# (delVIP) as each listener is torn down — unlike fwctl's deliberately
+# persistent ruleset, there's no "safe" state to leave a VIP in once
+# nothing is listening behind it, so cleanup here is correct.
+
+[Install]
+WantedBy=multi-user.target

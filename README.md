@@ -29,8 +29,8 @@ kira olmaydi (default-deny).
 | Phase 1 | `netdiscd` — LAN qurilmalarini avtomatik topish (ARP/DHCP/SNMP/hostapd) | ✅ Tayyor |
 | Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi, DDoS himoyasi | ✅ Tayyor |
 | Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ✅ Tayyor |
-| Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ⏳ Keyingi |
-| Phase 5 | Backend serverlar metrikasi | ⏳ |
+| Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ✅ Tayyor |
+| Phase 5 | Backend serverlar metrikasi | ⏳ Keyingi |
 | Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ |
 | Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ |
 
@@ -52,12 +52,29 @@ topologiyada haqiqiy paketlar bilan sinaldi — internet-tomon serverning o'z
 logi LAN mijozining haqiqiy IP'si emas, gateway'ning WAN IP'sini ko'rsatishi
 orqali NAT tasdiqlandi.
 
+Endi `lan_forward` orqali ruxsat berilgan trafik haqiqiy load-balancing
+serverlarga ham boradi: `lbd` har bir server guruhi uchun VIP manzilini
+(`/32`, LAN interfeysida) ko'taradi, real TCP ulanishlarni `round_robin`
+yoki `least_conn` bo'yicha tanlangan backend'ga proksi qiladi, va har 3
+soniyada TCP-connect health check qiladi (istalgan turdagi server uchun
+ishlaydi — HTTP shart emas). `netdiscd`/`fwctl` kabi `lbd` ham Postgres'ga
+bevosita ulanmaydi — `internal/lbsync` `server_groups`/`backend_servers`ni
+o'qib unga push qiladi va sog'liq natijalarini orqaga yozadi. 4-tugunli
+`ip netns` topologiyasida haqiqiy backend'lar (python http.server) bilan
+sinaldi: round-robin almashinuvi, backend o'chganda avtomatik chetlashtirish
+(health check + jonli trafik ikkalasi ham tekshirildi), tiklanganda
+qaytadan ishga qo'shilishi, `least_conn`ning haqiqiy faol-ulanish soniga
+qarab tanlashi, guruhni o'chirish/DB orqali faolsizlantirish VIP'ni to'g'ri
+bo'shatishi, va butun boshqaruv zanjiri (real Postgres → API → lbd → orqaga
+Postgres) uchtan-uchgacha tasdiqlandi.
+
 ## Loyiha tuzilmasi
 
 ```
 cmd/api/              REST API entrypoint
 cmd/netdiscd/          LAN qurilma topish daemoni (Phase 1) entrypoint
 cmd/fwctl/             nftables ACL enforcement daemoni (Phase 2) entrypoint
+cmd/lbd/               L4 load balancer daemoni (Phase 4) entrypoint
 internal/
   config/              Muhit o'zgaruvchilarini o'qish
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
@@ -69,6 +86,8 @@ internal/
   discovery/            API tomonida netdiscd snapshot'ini Postgres'ga sinxronlash
   firewall/             fwctl'ning nftables ruleset generator/apply/manager/socket serveri
   aclsync/               API tomonida access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
+  lb/                  lbd'ning VIP/proksi/health-check/manager + Unix-socket serveri
+  lbsync/               API tomonida server_groups/backend_servers'ni Postgres'dan o'qib lbd'ga push qiluvchi va sog'liqni orqaga yozuvchi
 web/                   React + TypeScript + Vite admin paneli
 deploy/
   docker/              Control-plane uchun Dockerfile'lar va docker-compose.yml
