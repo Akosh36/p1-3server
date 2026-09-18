@@ -39,8 +39,8 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateDeviceRequest struct {
-	Nickname   *string             `json:"nickname,omitempty"`
-	AccessRole *models.AccessRole  `json:"access_role,omitempty"` // "user", "admin", or null to revoke
+	Nickname   *string            `json:"nickname,omitempty"`
+	AccessRole *models.AccessRole `json:"access_role,omitempty"` // "user", "admin", or null to revoke
 }
 
 // handleUpdateDevice is how an admin assigns/revokes User or Admin rights to

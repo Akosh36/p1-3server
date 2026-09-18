@@ -1,0 +1,30 @@
+[Unit]
+Description=p13server netdiscd - LAN device discovery daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Reads /proc/net/arp, dnsmasq's lease file, and (optionally) SNMP/hostapd —
+# no capability beyond normal root is required, but it must run as root (or
+# with the socket dir + lease file readable) because /run/p13server is
+# created root:root by design (see docs/deploy.md's privilege split).
+ExecStart=/usr/local/bin/netdiscd
+Restart=on-failure
+RestartSec=2s
+
+# Environment (override the OS package's dnsmasq/SNMP/hostapd wiring here):
+Environment=JWT_SECRET=unused-by-netdiscd-but-required-by-shared-config-loader
+Environment=NETDISC_SOCKET=/run/p13server/netdiscd.sock
+Environment=NETDISC_DNSMASQ_LEASE_FILE=/var/lib/misc/dnsmasq.leases
+# Environment=NETDISC_SNMP_TARGET=192.168.1.2:161
+# Environment=NETDISC_SNMP_COMMUNITY=public
+# Environment=NETDISC_SNMP_SWITCH_NAME=switch1
+# Environment=NETDISC_HOSTAPD_SOCKET_DIR=/var/run/hostapd
+# Environment=NETDISC_HOSTAPD_SSID=
+
+RuntimeDirectory=p13server
+RuntimeDirectoryMode=0770
+
+[Install]
+WantedBy=multi-user.target

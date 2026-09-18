@@ -35,19 +35,50 @@ HTTP nginx for local/dev use only).
 
 ## Data-plane (systemd units — added per phase)
 
-Not shipped yet: `netdiscd` (Phase 1), `fwctl` (Phase 2), `lbd` (Phase 4),
-`capd` (Phase 6). Each phase adds:
+### netdiscd (Phase 1 — shipped)
+
+```bash
+go build -o /usr/local/bin/netdiscd ./cmd/netdiscd
+sudo cp deploy/systemd/netdiscd.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now netdiscd
+```
+
+netdiscd has no database access at all (see CLAUDE.md §4) — it only
+publishes a snapshot on `/run/p13server/netdiscd.sock`, which `cmd/api`'s
+`internal/discovery.Run` polls every 5s and upserts into `devices` and
+`switch_ports`. It merges four independent, all-optional sources:
+
+| Source | What it needs | What it gives |
+|---|---|---|
+| ARP table (`/proc/net/arp`) | Nothing (always available on Linux) | IP↔MAC, "is it here right now" for wired devices |
+| dnsmasq lease file | `NETDISC_DNSMASQ_LEASE_FILE` (default `/var/lib/misc/dnsmasq.leases`) | Hostname, a fallback IP |
+| SNMP (managed switch) | `NETDISC_SNMP_TARGET` set to `ip:161` | Per-port link status (IF-MIB) and, if the switch exposes it, MAC→port (BRIDGE-MIB `dot1dTpFdbTable`) |
+| hostapd control socket | `NETDISC_HOSTAPD_SOCKET_DIR` set (e.g. `/var/run/hostapd`) | Which MACs are currently associated to the local AP |
+
+Any source left unconfigured is simply skipped — netdiscd runs fine with
+just the ARP table on a LAN with no managed switch or local AP yet. A
+device is never deleted once seen; going quiet only flips `is_online` to
+false after `NETDISC_STALE_AFTER` (default 90s), so an admin can still find
+and revoke a device that has stepped away.
+
+Granting a device's User/Admin role happens in the admin panel's **LAN**
+page ("Barcha aniqlangan qurilmalar" table) — that PATCH is what `fwctl`
+(Phase 2) will read to build its nftables allow-lists.
+
+### Still not shipped: fwctl (Phase 2), lbd (Phase 4), capd (Phase 6)
+
+Each adds:
 
 1. The Go binary under `cmd/<name>`.
 2. A systemd unit in `deploy/systemd/<name>.service` (runs as `root`, or the
    minimum capability set the daemon actually needs — documented in that
    unit file).
-3. Whatever OS package it orchestrates (`dnsmasq`, `nftables`, `wireguard-tools`).
+3. Whatever OS package it orchestrates (`nftables`, `wireguard-tools`).
 
-Until then, the "Server" page's live metrics, and every CRUD page (devices,
-admins, server groups, LAN networks), work end-to-end against the
-control-plane alone — they just reflect whatever is in the database rather
-than live network state.
+Until fwctl ships, granting a role in the LAN page updates the database
+(and is fully visible in the Users/Admins pages), but nothing yet enforces
+it at the network layer.
 
 ## Local development (no Docker)
 

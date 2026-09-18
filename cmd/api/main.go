@@ -19,6 +19,7 @@ import (
 	"github.com/Akosh36/p1-3server/internal/auth"
 	"github.com/Akosh36/p1-3server/internal/config"
 	"github.com/Akosh36/p1-3server/internal/db"
+	"github.com/Akosh36/p1-3server/internal/discovery"
 	"github.com/Akosh36/p1-3server/internal/httpapi"
 	"github.com/Akosh36/p1-3server/internal/metrics"
 	"github.com/Akosh36/p1-3server/internal/models"
@@ -56,6 +57,7 @@ func main() {
 	}
 
 	go metrics.Run(ctx, pool, 10*time.Second)
+	go discovery.Run(ctx, pool, cfg.NetdiscSocket, 5*time.Second)
 
 	srv := httpapi.New(pool, cfg)
 	httpServer := &http.Server{

@@ -189,7 +189,8 @@ sinxronlaydi (Phase 2, hali yozilmagan).
 | Data-plane daemonlar | **Go** | Yagona binary, past xotira, systemd bilan integratsiya, root-level tarmoq ishlari uchun standart |
 | Control-plane API | **Go** (chi router) | Daemon'lar bilan bitta til — kod bazasi bir xil |
 | Ma'lumotlar bazasi | **PostgreSQL 16** (+ TimescaleDB, ixtiyoriy) | Relyatsion + vaqt-qatori ma'lumot bitta DB'da |
-| DHCP | **dnsmasq** | Yengil, ishonchli (hali ulanmagan — Phase 3) |
+| DHCP | **dnsmasq** | Yengil, ishonchli (lease fayli Phase 1'da o'qiladi; DHCP serverning o'zi hali ulanmagan — Phase 3) |
+| Tarmoq topish | **ARP jadvali + `gosnmp`** (IF-MIB/BRIDGE-MIB) + hostapd control socket | Phase 1'da tayyor, real sinaldi |
 | Firewall | **nftables** | Zamonaviy Linux standarti, named sets (hali ulanmagan — Phase 2) |
 | L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh (hali yozilmagan — Phase 4) |
 | Paket ushlash | **libpcap**/tcpdump asosida `capd` | .pcap to'g'ridan-to'g'ri Wireshark'da ochiladi (hali yozilmagan — Phase 6) |
@@ -248,6 +249,7 @@ Migratsiyalar `internal/db/migrate.go` orqali **avtomatik** ishga tushadi
 
 ```
 cmd/api/main.go          REST API entrypoint (bootstrap super_admin, migratsiya, HTTP server)
+cmd/netdiscd/main.go     netdiscd entrypoint (kollektorlarni ishga tushiradi, socket serveri)
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
@@ -255,15 +257,19 @@ internal/
   auth/                   JWT, bcrypt, TOTP
   httpapi/                HTTP handlerlar, middleware, router (chi)
   metrics/                Host CPU/RAM/Disk/Net metrikalarini yig'uvchi (gopsutil)
+  netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
+                           store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
+  discovery/              API tomonida: netdiscd snapshot'ini pull qilib Postgres'ga upsert
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
   src/context/            AuthContext (JWT holati)
-  src/components/         Layout, DeviceTable, Card/Panel/StatTile
+  src/components/         Layout, DeviceTable, AllDevicesTable (huquq berish), Card/Panel/StatTile
   src/pages/              Dashboard, Server, Users, Admins, Servers, LAN, Firewall, Logs, Login
   src/theme/palette.ts    dataviz skill'dan validatsiya qilingan ranglar
 deploy/
   docker/                 api.Dockerfile, web.Dockerfile, docker-compose.yml (control-plane)
-  systemd/, nftables/, dnsmasq/   Data-plane uchun — bosqichma-bosqich to'ldiriladi
+  systemd/netdiscd.service  netdiscd uchun tayyor unit fayl
+  systemd/, nftables/, dnsmasq/   Qolgan data-plane uchun — bosqichma-bosqich to'ldiriladi
 docs/deploy.md            To'liq deploy qo'llanmasi (control-plane vs data-plane)
 README.md                 Loyiha holati jadvali + tezkor ishga tushirish
 ```
@@ -296,11 +302,59 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   har tikda noto'g'ri jamlanib ketishi (grafikda ma'nosiz raqamlar
   chiqargan edi — tuzatildi).
 
+### ✅ Phase 1 — tayyor va real sinaldi (real ARP/dnsmasq/SNMP manbalar bilan, unit test + end-to-end)
+
+- **`netdiscd`** (`cmd/netdiscd`, `internal/netdisc/`) — imtiyozsiz Postgres bilan
+  ishlamaydigan alohida daemon (data-plane), 4 ta mustaqil, bir-biridan
+  qat'iy nazar ishlaydigan kollektor bilan:
+  - **ARP** (`/proc/net/arp`) — passiv, real vaqtda "hozir shu yerdami" signali.
+  - **dnsmasq lease fayli** — hostname va fallback IP.
+  - **SNMP** (IF-MIB port holati + BRIDGE-MIB `dot1dTpFdbTable` orqali
+    MAC→port, ikkinchisi best-effort) — real `snmpd` instansiyasiga qarshi
+    sinaldi.
+  - **hostapd control socket** — lokal WiFi mijozlari (protokol yozilgan,
+    real hostapd'siz to'liq sinalmagan — quyidagi cheklovga qarang).
+  - Har bir manba ixtiyoriy: birortasi sozlanmagan/mavjud bo'lmasa, shunchaki
+    o'tkazib yuboriladi (masalan managed switch yo'q bo'lsa, faqat ARP ishlaydi).
+  - Natija **hech qachon o'chirilmaydi** — qurilma "offlayn" bo'lib qoladi
+    (`NETDISC_STALE_AFTER`, standart 90s), lekin ro'yxatdan yo'qolmaydi.
+  - Snapshot `/run/p13server/netdiscd.sock` orqali JSON (`GET /snapshot`)
+    sifatida beriladi — netdiscd Postgres haqida umuman bilmaydi.
+- **`internal/discovery`** (control-plane, `cmd/api` ichida ishlaydi) — shu
+  socketni har 5 soniyada so'rab, `devices` va `switch_ports` jadvallariga
+  upsert qiladi (tranzaksiya ichida, switch port ID'larini avval yechib
+  keyin device'larga bog'laydi). netdiscd ishlamasa, bir marta ogohlantirib
+  jim davom etadi (API'ni qulatmaydi).
+- **LAN sahifasiga qo'shildi:** "Barcha aniqlangan qurilmalar" jadvali —
+  admin endi har qanday topilgan qurilmaga (nickname + User/Admin/Yo'q
+  huquq) to'g'ridan-to'g'ri shu yerdan belgilay oladi. Bu Phase 0'dagi
+  bo'shliqni to'ldirdi: avval Users/Admins sahifalari faqat **allaqachon**
+  huquq berilgan qurilmalarni ko'rsatardi, huquq berishning o'zi uchun
+  panelda hech qanday yo'l yo'q edi.
+- **Sinov:** unit testlar (`internal/netdisc/*_test.go` — ARP parser, dnsmasq
+  parser, SNMP OID/MAC ajratish), va **to'liq end-to-end** integratsion sinov:
+  real `/proc/net/arp` + qo'lda yozilgan dnsmasq lease fayli + sandbox'da
+  ishga tushirilgan haqiqiy `snmpd` (IF-MIB) → netdiscd → Unix socket →
+  `internal/discovery` → Postgres → REST API → React LAN sahifasi →
+  Playwright orqali huquq berish → Userlar sahifasida darhol ko'rinishi —
+  hammasi haqiqiy ma'lumot bilan tekshirildi.
+- **Bilingan cheklovlar (halol, kodda ham yozilgan):**
+  - hostapd real WiFi uskunasisiz to'liq sinalmadi (protokol client kodi
+    yozilgan, lekin bu sandbox'da wireless PHY yo'q).
+  - SNMP orqali MAC→port xaritalash (`dot1dTpFdbTable`) faqat switch shu
+    jadvalni qo'llab-quvvatlasa ishlaydi — sinovda ishlatilgan oddiy
+    net-snmp agenti buni bermaydi (kutilgan holat, kodda hujjatlashtirilgan).
+  - Faol ARP probing (arping) yo'q — faqat passiv, kernel allaqachon
+    yechgan yozuvlarni o'qiydi (`CAP_NET_RAW` talab qilinishi sababli
+    Phase 1 doirasidan tashqarida qoldirildi).
+  - "Wireless remote VPN" turidagi qurilmalar (Phase 7, masofaviy LAN)
+    netdiscd tomonidan aniqlanmaydi — bu alohida VPN peer'ning o'z LAN'i,
+    kelajakda alohida mexanizm kerak bo'ladi.
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 1 | `netdiscd` — LAN qurilmalarini avtomatik topish (ARP/dnsmasq lease/SNMP switch port/hostapd wireless client) | `cmd/netdiscd/` |
 | Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi (`allowed_user`/`allowed_admin` setlar), DDoS baseline qoidalar | `cmd/fwctl/` |
 | Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi, "o'rtadagi server"ga faqat admin guruhidan kirish qoidasi | — |
 | Phase 4 | `lbd` — haqiqiy L4 TCP load balancer, VIP-per-guruh | `cmd/lbd/` |
@@ -309,9 +363,11 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
 | Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
 
-**Muhim:** `cmd/netdiscd`, `cmd/fwctl`, `cmd/lbd`, `cmd/capd` papkalari
-hozircha repo'da yo'q (bo'sh papkalar git'da saqlanmaydi) — Phase 1/2/4/6
-boshlanganda yaratiladi.
+**Muhim:** `cmd/fwctl`, `cmd/lbd`, `cmd/capd` papkalari hozircha repo'da yo'q
+(bo'sh papkalar git'da saqlanmaydi) — Phase 2/4/6 boshlanganda yaratiladi.
+Muhim: LAN sahifasida huquq berish hozircha faqat **ma'lumotlar bazasini**
+yangilaydi — `fwctl` (Phase 2) ulanmaguncha bu tarmoq darajasida (nftables)
+hali kuchga kirmaydi.
 
 ---
 
@@ -403,7 +459,12 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 ## 12. Keyingi qadam
 
-Foydalanuvchi tasdiqlagan roadmap bo'yicha navbatdagi ish — **Phase 1:
-`netdiscd`** (LAN qurilmalarini ARP/DHCP-lease/SNMP/hostapd orqali avtomatik
-topish va `devices` jadvaliga yozish). Buni boshlashdan oldin ushbu faylni
-va `README.md`dagi holat jadvalini yangilab borish tavsiya etiladi.
+Phase 1 (`netdiscd`) tayyor va real sinaldi — bo'lim 8'ga qarang. Navbatdagi
+ish — **Phase 2: `fwctl`** (`cmd/fwctl/`): `access_grants` jadvalini
+kuzatib, nftables'da `allowed_user`/`allowed_admin` named set'larini
+sinxronlab turadigan daemon, default-deny siyosati bilan, plus DDoS baseline
+qoidalari (qaror #16: aqlli standart qiymatlar). Bu ulangandan keyin LAN
+sahifasidagi huquq berish birinchi marta **haqiqatan** tarmoq darajasida
+kuchga kiradi (hozircha faqat DB'da saqlanadi — bo'lim 8'dagi eslatmaga
+qarang). Har bosqich tugagach ushbu faylni va `README.md`/`docs/deploy.md`ni
+yangilab borish tavsiya etiladi.

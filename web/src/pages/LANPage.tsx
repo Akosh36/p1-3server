@@ -1,11 +1,13 @@
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../api/client'
-import type { LANNetwork, SwitchPort } from '../api/types'
+import type { Device, LANNetwork, SwitchPort } from '../api/types'
 import { Panel, EmptyNote } from '../components/Card'
+import AllDevicesTable from '../components/AllDevicesTable'
 
 export default function LANPage() {
   const { data: ports } = usePolling(() => api.get<SwitchPort[]>('/switch-ports'))
   const { data: networks, refresh: refreshNetworks } = usePolling(() => api.get<LANNetwork[]>('/lan-networks'))
+  const { data: devices, refresh: refreshDevices } = usePolling(() => api.get<Device[]>('/devices'))
 
   async function toggleNetwork(n: LANNetwork) {
     await api.patch(`/lan-networks/${n.id}`, { is_active: !n.is_active })
@@ -95,6 +97,10 @@ export default function LANPage() {
             </tbody>
           </table>
         )}
+      </Panel>
+
+      <Panel title="Barcha aniqlangan qurilmalar — nom berish va huquq belgilash">
+        <AllDevicesTable devices={devices ?? []} onChanged={refreshDevices} />
       </Panel>
     </div>
   )

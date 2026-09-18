@@ -15,16 +15,16 @@ type Config struct {
 	DatabaseURL string
 
 	// HTTP API
-	HTTPAddr        string
-	JWTSecret       string
-	JWTTokenTTL     time.Duration
-	AllowedOrigins  string
+	HTTPAddr       string
+	JWTSecret      string
+	JWTTokenTTL    time.Duration
+	AllowedOrigins string
 
 	// Data-plane daemon control sockets (Unix sockets, localhost-only)
-	NetdiscSocket  string
-	FwctlSocket    string
-	LbdSocket      string
-	CapdSocket     string
+	NetdiscSocket string
+	FwctlSocket   string
+	LbdSocket     string
+	CapdSocket    string
 
 	// Paths
 	CaptureDir string
