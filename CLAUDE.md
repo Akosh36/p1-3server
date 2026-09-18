@@ -192,8 +192,8 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 | DHCP | **dnsmasq** | Yengil, ishonchli — Phase 3'da haqiqiy DHCP server sifatida sinaldi (lease fayli Phase 1'dan beri o'qiladi) |
 | Tarmoq topish | **ARP jadvali + `gosnmp`** (IF-MIB/BRIDGE-MIB) + hostapd control socket | Phase 1'da tayyor, real sinaldi |
 | Firewall | **nftables** | Zamonaviy Linux standarti, named sets — Phase 2'da tayyor va real sinaldi |
-| L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh (hali yozilmagan — Phase 4) |
-| Paket ushlash | **libpcap**/tcpdump asosida `capd` | .pcap to'g'ridan-to'g'ri Wireshark'da ochiladi (hali yozilmagan — Phase 6) |
+| L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh — Phase 4'da tayyor, real sinaldi |
+| Paket ushlash | Real **tcpdump** subprocess asosida `capd` | .pcap to'g'ridan-to'g'ri Wireshark'da ochiladi — Phase 6'da tayyor, real sinaldi |
 | VPN | **WireGuard** | Eng tez va sodda site-to-site (hali yozilmagan — Phase 7) |
 | Frontend | **React + TypeScript + Vite + TailwindCSS** | Zamonaviy, minimalist |
 | Grafiklar | **Recharts** + `dataviz` skill palitrasi | Validatsiya qilingan ranglar (`node scripts/validate_palette.js`) |
@@ -206,7 +206,8 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 
 `internal/db/migrations/0001_init.up.sql` — barcha jadvallar (Phase 5'da
 `0002_backend_metrics.up.sql` bilan `backend_servers.agent_token` va
-`backend_metrics` jadvali qo'shildi, quyida ko'rsatilgan):
+`backend_metrics` jadvali, Phase 6'da `0003_capture_stopped.up.sql` bilan
+`capture_status`ga `'stopped'` qiymati qo'shildi, quyida ko'rsatilgan):
 
 ```
 admins(id, username, password_hash, totp_secret, role[super_admin|admin],
@@ -232,8 +233,13 @@ backend_servers(id, group_id, ip, port, weight, is_healthy, last_check_at, respo
                  agent_token)  -- Phase 5: cmd/backendagentd shu token bilan o'zini tanitadi
 
 traffic_captures(id, device_id, started_by_admin_id, file_path, started_at,
-                  stopped_at, size_bytes, status[recording|rotated|downloaded|error],
+                  stopped_at, size_bytes,
+                  status[recording|rotated|downloaded|error|stopped],
                   rotation_reason)
+  -- Phase 6: bitta qator = bitta pcap segment. Rotatsiya (avtomatik yoki
+  -- "Yuklab olish") joriy qatorni yakunlab, darhol shu device_id uchun
+  -- yangi 'recording' qator boshlaydi — "yozish" hech qachon ko'zga
+  -- ko'rinarli to'xtamaydi, faqat aniq "To'xtatish" orqali.
 
 audit_logs(id, actor_admin_id, action, target_type, target_id, details JSONB, created_at)
 
@@ -261,6 +267,8 @@ cmd/lbd/main.go          lbd entrypoint (LBD_INTERFACE talab qiladi, socket serv
 cmd/backendagentd/main.go  Backend server metrikasi push-agenti (Phase 5) — gateway'da
                            EMAS, har bir backend serverda ishlaydi, AGENT_API_URL/
                            AGENT_TOKEN talab qiladi
+cmd/capd/main.go         capd entrypoint (CAPD_INTERFACE talab qiladi, socket serveri,
+                         kvota-enforcement fon jarayoni)
 internal/
   config/                 Muhit o'zgaruvchilarini o'qish (.env kabi)
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
@@ -284,6 +292,15 @@ internal/
                            server.go (Unix-socket: /sync, /status)
   lbsync/                 API tomonida: server_groups/backend_servers'ni Postgres'dan o'qib
                            lbd'ga push qiluvchi, sog'liqni orqaga yozuvchi
+  capd/                   capd: types.go (Start/Stop/Status wire tiplari), validate.go
+                           (MAC/yo'l tekshiruvi), manager.go (tcpdump jarayon boshqaruvi —
+                           Start/Stop/Status/StopAll, bitta cmd.Wait() qoidasi bilan),
+                           quota.go (davriy disk-kvota enforcement), server.go (Unix-socket)
+  capdsync/               API tomonida: traffic_captures'ni boshqaruvchi (yagona
+                           qaror joyi) — NewFilePath (fayl nomlash), Run (reconciliation
+                           tsikli: start/rotate/live-size), RotateCapture (avtomatik VA
+                           "Yuklab olish" ikkalasi ham shu orqali), StartCapture/
+                           StopCapture/ReadCaptureFile (httpapi uchun bevosita chaqiruvlar)
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
   src/context/            AuthContext (JWT holati)
@@ -297,6 +314,7 @@ deploy/
   systemd/lbd.service     lbd uchun tayyor unit fayl (LBD_INTERFACE sozlanishi kerak)
   systemd/backendagentd.service  backendagentd uchun tayyor unit fayl (backend serverga
                           o'rnatiladi, gateway'ga emas — AGENT_API_URL/AGENT_TOKEN kerak)
+  systemd/capd.service    capd uchun tayyor unit fayl (CAPD_INTERFACE sozlanishi kerak)
   dnsmasq/p13server.conf.example  Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiyasi
   nftables/               Bo'sh — nftables qoidalari kod orqali (internal/firewall) generatsiya
                            qilinadi, statik fayl sifatida saqlanmaydi
@@ -663,16 +681,128 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   tarmoqqa joylashtirish yoki (kelishilgan holda) MAC'iga admin huquqi
   berish kerak bo'ladi.
 
+### ✅ Phase 6 — tayyor va real sinaldi (haqiqiy `tcpdump` + `ip netns` + real brauzer)
+
+- **Qaror (foydalanuvchining o'z talabi, bo'lim 2.3):** har bir user uchun
+  "Start" bosilganda pcap yozib olish, "Download" bosilganda yozuv
+  yakunlanib yuklanadi va **yangi faylga yozish davom etadi**, umumiy disk
+  kvotasi (qaror #8). Bularning barchasi so'zma-so'z amalga oshirildi.
+- **Arxitektura — capd/capdsync bo'linishi lbd/lbsync'ga o'xshaydi, lekin
+  qaror qilish tomoni yanada kuchliroq markazlashtirilgan:**
+  - `internal/capd` (data-plane) atayin "ahmoq": u fayl nomlarini, capture
+    ID'larini yoki rotatsiyadan keyin nima bo'lishini hech qachon o'zi hal
+    qilmaydi. `Start(capture_id, mac, file_path)` shunchaki shu MAC uchun
+    `tcpdump -i <iface> -U -w <file_path> ether host <mac>` ishga tushiradi
+    (`-U` — har paketni darhol diskka yozadi, SIGTERM kelganda fayl hech
+    qachon qirqilib qolmasligi uchun). `Status()` har bir joriy yozuv uchun
+    hajm/vaqtni hisoblab, sozlangan chegaradan oshgan bo'lsa
+    `needs_rotation: true` deb **faqat xabar beradi** — o'zi hech narsani
+    to'xtatmaydi.
+  - `internal/capdsync` (control-plane) — **yagona qaror joyi**: har ~2
+    soniyada `traffic_captures`(status='recording')ni capd'ning jonli
+    holati bilan solishtiradi. Yo'q bo'lsa — qayta ishga tushirishga
+    urinadi (capd vaqtincha ishlamay qolgan bo'lishi mumkin — xavfsiz, capd
+    allaqachon ishlayotgan capture_id'ni rad etadi). `needs_rotation`
+    bo'lsa — `RotateCapture()`: joriy segmentni to'xtatadi, qatorni
+    yakunlaydi (`rotated`/`downloaded`, sababi bilan), **darhol** yangi
+    `recording` qator qo'shib capd'ga qayta ishga tushirishni buyuradi.
+    Bir xil `RotateCapture()` ikkalasi uchun ham ishlatiladi: avtomatik
+    hajm/vaqt chegarasi UCHUN HAM, "Yuklab olish" tugmasi UCHUN HAM — farqi
+    faqat status va sababi (`size_limit`/`time_limit` vs
+    `manual_download`).
+  - MAC bo'yicha filtrlash (IP emas) — DHCP lease yangilanishiga
+    chidamli. LAN interfeysida (gateway o'zi shu interfeysda) tutish
+    ikkala yo'nalishni ham ko'rsatadi, chunki bu platforma qurilmaning
+    standart shlyuzi (qaror #14): qurilmadan chiqqan HAM, qurilmaga
+    qaytgan HAM trafik shu interfeysdan, shu ikkita MAC (gateway va
+    qurilma) orasida o'tadi.
+  - Disk kvotasi (`internal/capd/quota.go`) — har 10 soniyada
+    `CAPTURE_DIR`ni to'liq skanerlab (capd qayta ishga tushsa ham kvota
+    davom etadi), umumiy hajm chegaradan oshsa eng eski (mtime bo'yicha)
+    tugallangan fayllarni o'chiradi — **joriy yozilayotgan faylga hech
+    qachon tegmaydi**. O'chirilgan fayllar `capdsync`ga xabar qilinadi, u
+    esa mos qatorni `status='error'`, `rotation_reason='quota_evicted'`
+    (mavjud sababga qo'shib: masalan `"size_limit; quota_evicted"`) deb
+    belgilaydi — halol, "fayl yo'qoldi" degan yolg'on ko'rsatilmaydi.
+  - `POST /api/captures/{id}/stop` — bazadagi qatorni **darhol**
+    `status='stopped'`ga o'tkazadi (capd'ga signal yuborishdan OLDIN), shu
+    orqali xuddi shu paytda ishlayotgan `capdsync` tsikli bu qatorni
+    "ishlamayapti, qayta ishga tushiray" deb aralashib qolmaydi — endi u
+    faqat `status='recording'` qatorlarni ko'radi.
+- **Topilgan haqiqiy concurrency xatosi (faqat og'ir trafikda ko'rinadi,
+  endi `internal/capd/manager.go`da yuklama ko'taruvchi izoh):**
+  `Stop()` o'zining alohida goroutine'ida `cmd.Wait()`ni chaqirar edi,
+  shu bilan bir vaqtda `Start()`da ishga tushirilgan `watch()` goroutine'i
+  ham xuddi shu `*exec.Cmd` ustida `cmd.Wait()`ni chaqirar edi. Go'ning
+  `os/exec` hujjatlari buni aniq taqiqlaydi ("It is also incorrect to call
+  Wait concurrently with any other method on the Cmd"). Yengil trafikda
+  (bir nechta ping) bitta chaqiruv tezda g'olib chiqib, ikkinchisi zararsiz
+  yo'qolardi — shuning uchun sinovning boshida sezilmadi. Lekin 5 MB
+  haqiqiy TCP fayl uzatilgach (`tcpdump`ning o'chishi ko'proq vaqt
+  olganda), ikkala `Wait()` chaqiruvi ham bir-birining natijasini kutib
+  **abadiy osilib qolardi** — `POST /captures/{id}/stop` hech qachon javob
+  qaytarmasdi. Tuzatish: endi faqat `watch()` (yagona joyda) `cmd.Wait()`ni
+  chaqiradi va uni to'liq tugagach yopiladigan `done` kanalini yopadi;
+  `Stop()` endi o'zi `Wait()` chaqirmaydi, shunchaki shu kanalni kutadi.
+- **Sinov — `ip netns` orqali haqiqiy veth juftligi + haqiqiy `tcpdump`,
+  keyin haqiqiy Postgres + haqiqiy `cmd/api` + haqiqiy brauzer:**
+  1. `lan`↔`gw` veth juftligida `lan`ning haqiqiy MAC manzili bo'yicha
+     capture ishga tushirildi. `lan`dan haqiqiy `ping` yuborildi — hosil
+     bo'lgan `.pcap` fayl `tcpdump -r` bilan o'qildi va **ikkala
+     yo'nalishdagi** ARP+ICMP paketlari to'liq, to'g'ri ko'rinishda
+     tasdiqlandi (Wireshark'da xuddi shunday ochiladi).
+  2. Haqiqiy 5 MB fayl `lan`dan `gw`dagi python `http.server`ga
+     yuklab olindi — `GET /captures/status` `needs_rotation: true,
+     rotation_reason: "size_limit"` deb to'g'ri xabar berdi (1 MB
+     chegara bilan). Shu aynan shu stsenariyda yuqoridagi concurrency
+     xatosi topildi va tuzatildi; tuzatishdan keyin `/stop` 45
+     millisekundda qaytdi (avval — abadiy).
+  3. **To'liq boshqaruv zanjiri haqiqiy Postgres bilan**: haqiqiy
+     `cmd/api` (`internal/capdsync` bilan) ishga tushirilib, real
+     `POST /api/devices/{id}/captures` orqali yozuv boshlandi —
+     `capdsync`ning keyingi tsikli buni avtomatik capd'ga yetkazganini
+     (jonli `size_bytes` bazada yangilanib turishini) tasdiqladi.
+  4. Real `GET /api/captures/{id}/download` — yozilayotgan captureда
+     chaqirilganda: joriy segment to'xtatilib yakunlandi
+     (`status='downloaded'`, `rotation_reason='manual_download'`), **yangi
+     'recording' qator darhol boshlandi**, va yuklab olingan fayl
+     `tcpdump -r` bilan to'g'ri o'qildi (real ping almashinuvi bilan).
+  5. `POST /api/captures/{id}/stop` — `status='stopped'`ga o'tdi, hech
+     qanday continuation yaratilmadi, keyingi `capdsync` tsikllari uni
+     tinch qoldirdi (qayta ishga tushirishga urinmadi).
+  6. Vaqt bo'yicha rotatsiya (`CAPD_ROTATE_SECONDS=3`) alohida sinaldi —
+     bir necha ketma-ket avtomatik rotatsiya (`rotation_reason=
+     "time_limit"`) va continuation'lar to'g'ri hosil bo'lishi
+     tasdiqlandi.
+  7. Disk kvotasi (`CAPD_MAX_TOTAL_MB=1`) — mavjud fayllar umumiy hajmi
+     chegaradan oshgach, eng eskilaridan boshlab (940 B, keyin 24 B,
+     keyin 5 MB) o'chirildi, **faqat joriy yozilayotgan fayl omon
+     qoldi**, va uchala o'chirilgan qatorning holati `error` +
+     `rotation_reason`ga `"; quota_evicted"` qo'shilgani bazada
+     tasdiqlandi.
+  8. **Userlar va Logs sahifalari haqiqiy headless brauzerda**
+     (Playwright, `chromium`) tekshirildi: "● Trafik yozish" bosilganda
+     qator jonli `00:00:SS` hisoblagichi va "■ To'xtatish" tugmasiga
+     almashdi; Logs sahifasida "Yuklab olish" bosilganda haqiqiy fayl
+     brauzer orqali yuklab olindi (`tcpdump -r` bilan tasdiqlangan,
+     haqiqiy ICMP trafik bilan) va eski qator "↓ Yuklab olindi (qo'lda
+     yuklab olindi)"ga, yangisi "● Yozilmoqda"ga almashdi; "To'xtatish"
+     bosilgach qator "● Trafik yozish" holatiga qaytdi. Hammasi brauzer
+     konsolida bironta xatosiz.
+- **Bilingan cheklovlar:** UDP/boshqa protokollar cheklanmagan (L4 emas,
+  bu safar butun trafik — barcha protokollarni tutadi, talabga mos).
+  `CAPD_ROTATE_MB`/`CAPD_MAX_TOTAL_MB` faqat butun megabayt granularityda
+  (environment o'zgaruvchisi) — kod ichida baytgacha aniq, faqat
+  konfiguratsiya darajasida yaxlitlangan. Wireless remote VPN orqali
+  ulangan qurilmalar uchun capture hali sinalmagan (Phase 7'dan keyingi
+  masala).
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 6 | `capd` — on-demand pcap yozib olish, rotatsiya, kvota | `cmd/capd/` |
 | Phase 7 | WireGuard site-to-site (masofaviy Wireless LAN), real-vaqt reachability | — |
 | Phase 8 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
-
-**Muhim:** `cmd/capd` papkasi hozircha repo'da yo'q (bo'sh papkalar
-git'da saqlanmaydi) — Phase 6 boshlanganda yaratiladi.
 
 ---
 
@@ -765,19 +895,22 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 ## 12. Keyingi qadam
 
 Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
-Phase 4 (`lbd`) va Phase 5 (`backendagentd`) tayyor va real sinaldi —
-bo'lim 8'ga qarang. Bu server endi to'liq ishlaydigan LAN gateway **va**
-load balancer: DHCP beradi, kirish huquqini nazorat qiladi, ruxsat
-berilganlarni internetga NAT bilan chiqaradi, `lan_forward`dagi ruxsat
-berilgan trafikni haqiqiy VIP'lar orqali orqadagi serverlarga taqsimlaydi,
-va endi har bir backend serverning o'z host metrikasi (CPU/RAM/disk/
-tarmoq) ham ko'rinadi. Navbatdagi ish — **Phase 6: `capd`**
-(`cmd/capd/`) — on-demand pcap yozib olish: admin Userlar sahifasida bitta
-qurilma uchun "Start" bosganda uning trafigini `.pcap` formatida yozib
-boshlaydi (rotatsiya hajm/vaqt bo'yicha, umumiy disk kvotasi bilan — qaror
-#8), fayl Logs bo'limiga tushadi, "Download" bosilganda vaqtincha
-to'xtab, fayl yakunlanib yuklanadi, so'ng yangi faylga yozish davom etadi
-(bo'lim 2.3'dagi Logs talabi). `capd` ham netdiscd/fwctl/lbd kabi
-Postgres'ga bevosita ulanmasligi kerak — `libpcap`/tcpdump asosida, root/
-`CAP_NET_RAW` talab qiladi. Har bosqich tugagach ushbu faylni va
+Phase 4 (`lbd`), Phase 5 (`backendagentd`) va Phase 6 (`capd`) tayyor va
+real sinaldi — bo'lim 8'ga qarang. Bu server endi to'liq ishlaydigan LAN
+gateway, load balancer **va** trafik yozib oluvchi tizim: DHCP beradi,
+kirish huquqini nazorat qiladi, ruxsat berilganlarni internetga NAT bilan
+chiqaradi, `lan_forward`dagi ruxsat berilgan trafikni haqiqiy VIP'lar
+orqali orqadagi serverlarga taqsimlaydi, har bir backend serverning o'z
+host metrikasi ko'rinadi, va endi admin istalgan userning trafigini
+on-demand pcap sifatida yozib, Wireshark'da tekshira oladi. Bo'lim
+2.3'dagi "Har bir bo'lim uchun talablar" jadvalidagi barcha qatorlar endi
+haqiqiy, ishlaydigan funksionallik bilan qoplangan — faqat **Wireless
+remote LAN** (WireGuard, qaror #11) qolmoqda. Navbatdagi ish —
+**Phase 7: WireGuard site-to-site** — masofadagi ikkinchi LAN tarmog'ini
+shu platformaga xavfsiz tunnel orqali bog'lash, LAN sahifasidagi
+"Wireless (masofaviy) LAN" bo'limini Active/Deactive tugmasi va real-vaqt
+reachability tekshiruvi bilan to'ldirish (`lan_networks`/`vpn_peers`
+jadvallari Phase 0'dan beri tayyor turibdi, hali hech narsa yozmagan).
+Shundan keyin Phase 8 (RBAC to'liq qo'llanilishi, xavfsizlik audit)
+navbatda. Har bosqich tugagach ushbu faylni va
 `README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.

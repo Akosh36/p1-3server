@@ -327,15 +327,111 @@ LAN segment `fwctl` controls, or grant the backend's MAC admin access as a
 workaround, both with their own trade-offs. A proper fix (e.g. a narrower,
 metrics-only nftables allowance) is future work, not part of this phase.
 
-### Still not shipped: capd (Phase 6)
+### capd (Phase 6 — shipped)
+
+On-demand packet capture, per device, on top of everything above.
+
+```bash
+apt-get install -y tcpdump   # capd shells out to the real binary
+go build -o /usr/local/bin/capd ./cmd/capd
+sudo cp deploy/systemd/capd.service /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/capd.service   # set CAPD_INTERFACE to your LAN interface
+sudo systemctl daemon-reload
+sudo systemctl enable --now capd
+```
+
+Like the other data-plane daemons, capd has no database access and is
+deliberately "dumb": `internal/capdsync` (in `cmd/api`) owns every decision
+— capture IDs, file names, when a segment rotates, what happens next — and
+tells capd only "start this MAC into this file" / "stop that". capd's own
+job is just running (or stopping) a real `tcpdump -i <iface> -U -w <path>
+ether host <mac>` process and reporting when a running capture has crossed
+its configured size/time threshold; it never rotates or restarts anything
+on its own. Filtering by MAC (not IP) survives a DHCP lease renewal, and
+capturing on the LAN-facing interface sees both directions of a device's
+traffic, since this platform is that device's default gateway (decision
+#14) — every packet either arrives from the device addressed to the
+gateway's own MAC, or leaves the gateway addressed to the device's MAC.
+
+`internal/capdsync`'s reconciliation loop (every ~2s) is the same shape as
+`lbsync`/`aclsync`: it compares `traffic_captures` rows with
+`status = 'recording'` against capd's live status, (re)starts any that
+aren't actually running yet (self-healing if capd was briefly down), and
+rotates any that have crossed their threshold — ending the current segment
+(`status = 'rotated'`, with a reason) and immediately starting a fresh one
+for the same device, so recording never visibly stops except via an
+explicit "Stop". The Logs page's "Download" button drives the exact same
+rotation function with `status = 'downloaded'` instead, which is how the
+spec's "Download pauses the recording, finalizes the file, then a new file
+starts" behavior is implemented — one function, two callers, one reason
+string different. `POST /api/captures/{id}/stop` is the one case that
+does *not* start a continuation: it flips the row to `'stopped'` *before*
+telling capd to stop, specifically so a concurrent reconciliation tick
+(which only ever touches rows still marked `'recording'`) can never race
+to "helpfully" restart it.
+
+Disk usage is capped two ways, both from decision #8: `CAPD_ROTATE_MB` /
+`CAPD_ROTATE_SECONDS` bound any single segment's size and age, and
+`CAPD_MAX_TOTAL_MB` bounds the total across every device's captures —
+enforced by capd itself scanning `CAPTURE_DIR` every 10s and deleting the
+oldest completed files (by mtime) until back under the cap, never a file
+still being written to. Evicted paths are reported back to
+`internal/capdsync`, which marks the matching row `status = 'error'` with
+`rotation_reason` noting `quota_evicted` (appended to whatever reason was
+already there, e.g. `"size_limit; quota_evicted"`) — an honest record that
+the file is gone, not a silently broken download link.
+
+**Verified with a real `tcpdump` process against a real veth pair, then
+against a real Postgres + real `cmd/api` + a real browser.** In an
+`ip netns` `lan`↔`gw` topology, a capture on `lan`'s real MAC correctly
+recorded a real `ping` exchange in both directions — read back with
+`tcpdump -r`, exactly as Wireshark would open it. Transferring a real 5MB
+file triggered `needs_rotation: true` at a 1MB threshold, and separately
+confirmed a real 3s time-based rotation. The full control-plane loop was
+then exercised through the actual HTTP API against a real local Postgres:
+`POST /api/devices/{id}/captures` started a real capture picked up by the
+next `capdsync` tick; `GET /api/captures/{id}/download` on a live
+recording correctly finalized it (`status = 'downloaded'`), started a
+continuation, and served back a valid, readable pcap; `POST
+/api/captures/{id}/stop` ended a capture with no continuation and no
+resurrection race; and a 1MB `CAPD_MAX_TOTAL_MB` correctly evicted the
+oldest files (skipping the one still being written) while marking their
+rows `status = 'error'`. The Users and Logs pages were checked in a real
+headless browser (Playwright): starting a capture flips the row to a live
+ticking duration with a Stop button, clicking "Yuklab olish" on the Logs
+page downloads a real file through the browser (verified afterward with
+`tcpdump -r`) while the table updates to show the old segment as
+downloaded and a new one recording — zero console errors throughout.
+
+**Real concurrency bug found by this testing, not by unit tests:**
+`Manager.Stop` spawned its own goroutine calling `cmd.Wait()` on the
+tcpdump process, while the `watch` goroutine started back in `Start` was
+*also* calling `cmd.Wait()` on that same process — something Go's
+`os/exec` docs explicitly forbid ("incorrect to call Wait concurrently
+with any other method on the Cmd"). Under light traffic (a few pings) one
+call usually reaped the process first and the other harmlessly lost the
+race, so this didn't surface immediately. Under heavier traffic (tcpdump
+taking longer to flush and exit after the 5MB transfer), the two calls
+could each end up waiting on the other's result, hanging
+`POST /captures/{id}/stop` forever. Fixed by making `watch` the *only*
+caller of `cmd.Wait()`, closing a `done` channel when it returns; `Stop`
+now just waits on that channel instead of calling `Wait()` a second time.
+
+**Known limitations:** rotation/quota thresholds are configured in whole
+megabytes (`CAPD_ROTATE_MB`, `CAPD_MAX_TOTAL_MB`) even though the
+underlying tracking is byte-precise — a config-level rounding choice, not
+a code limitation. Capture of a device connected via the future Phase 7
+WireGuard tunnel hasn't been tested (no such tunnel exists yet).
+
+### Still not shipped: WireGuard site-to-site (Phase 7)
 
 Adds:
 
-1. The Go binary under `cmd/capd`.
-2. A systemd unit in `deploy/systemd/capd.service` (runs as `root`, or the
-   minimum capability set the daemon actually needs — documented in that
-   unit file).
-3. Whatever OS package it orchestrates (`tcpdump`/`libpcap`).
+1. WireGuard configuration (`wg-quick` or an equivalent) for the tunnel
+   itself — likely orchestrated rather than a new Go daemon, following
+   decision #4's "build on ready-made tools" precedent (dnsmasq for DHCP).
+2. Wiring `lan_networks`/`vpn_peers` (already in the schema since Phase 0)
+   to real Active/Deactive control and a real-vaqt reachability check.
 
 ## Local development (no Docker)
 

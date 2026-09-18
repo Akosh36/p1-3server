@@ -1,0 +1,46 @@
+[Unit]
+Description=p13server capd - on-demand packet capture daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Shells out to real tcpdump on CAPD_INTERFACE — needs CAP_NET_RAW (raw
+# frames) and CAP_NET_ADMIN (promiscuous-ish socket setup on some kernels)
+# for that. Running as root is the simplest correct option; the ambient
+# capabilities alone also work if you don't want a root service:
+#   AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+#   User=p13server-capd
+ExecStart=/usr/local/bin/capd
+Restart=on-failure
+RestartSec=2s
+
+Environment=JWT_SECRET=unused-by-capd-but-required-by-shared-config-loader
+Environment=CAPD_SOCKET=/run/p13server/capd.sock
+Environment=CAPTURE_DIR=/var/lib/p13server/captures
+# The LAN-facing interface to sniff — same interface fwctl/lbd treat as the
+# LAN side. Required; capd refuses to start without it.
+Environment=CAPD_INTERFACE=eth0
+# A capture segment rotates into a fresh file once it crosses either limit
+# (whichever comes first) — internal/capdsync is what actually performs
+# the rotation once capd reports a capture has crossed one.
+Environment=CAPD_ROTATE_MB=50
+Environment=CAPD_ROTATE_SECONDS=300
+# Total disk usage across every *.pcap file under CAPTURE_DIR (across all
+# devices) — capd deletes the oldest completed files first once this is
+# exceeded, never a file still being written to.
+Environment=CAPD_MAX_TOTAL_MB=2048
+
+RuntimeDirectory=p13server
+RuntimeDirectoryMode=0770
+StateDirectory=p13server/captures
+StateDirectoryMode=0750
+
+# On stop/restart, every active tcpdump process is stopped cleanly
+# (Manager.StopAll in cmd/capd/main.go) before the socket closes, so a
+# manual restart never leaves an orphaned process still writing to a file
+# nothing is tracking — systemd's own cgroup-wide SIGTERM would reach
+# tcpdump directly anyway, but this also covers a plain `systemctl stop`.
+
+[Install]
+WantedBy=multi-user.target

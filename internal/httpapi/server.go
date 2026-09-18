@@ -52,6 +52,11 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/api/devices", s.handleListDevices)
 		r.Patch("/api/devices/{id}", s.handleUpdateDevice)
+		r.Post("/api/devices/{id}/captures", s.handleStartCapture)
+
+		r.Get("/api/captures", s.handleListCaptures)
+		r.Post("/api/captures/{id}/stop", s.handleStopCapture)
+		r.Get("/api/captures/{id}/download", s.handleDownloadCapture)
 
 		r.Get("/api/switch-ports", s.handleListSwitchPorts)
 

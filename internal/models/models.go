@@ -41,6 +41,7 @@ const (
 	CaptureRotated    CaptureStatus = "rotated"
 	CaptureDownloaded CaptureStatus = "downloaded"
 	CaptureError      CaptureStatus = "error"
+	CaptureStopped    CaptureStatus = "stopped"
 )
 
 type Admin struct {
@@ -157,6 +158,8 @@ type BackendMetric struct {
 type TrafficCapture struct {
 	ID               int64         `json:"id"`
 	DeviceID         int64         `json:"device_id"`
+	DeviceNickname   *string       `json:"device_nickname,omitempty"`
+	DeviceMAC        string        `json:"device_mac,omitempty"`
 	StartedByAdminID *int64        `json:"started_by_admin_id,omitempty"`
 	FilePath         string        `json:"file_path"`
 	StartedAt        time.Time     `json:"started_at"`

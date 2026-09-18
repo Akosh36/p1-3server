@@ -112,3 +112,19 @@ export interface AuditLog {
   details?: Record<string, unknown>
   created_at: string
 }
+
+export type CaptureStatus = 'recording' | 'rotated' | 'downloaded' | 'error' | 'stopped'
+
+export interface TrafficCapture {
+  id: number
+  device_id: number
+  device_nickname?: string
+  device_mac: string
+  started_by_admin_id?: number
+  file_path: string
+  started_at: string
+  stopped_at?: string
+  size_bytes: number
+  status: CaptureStatus
+  rotation_reason?: string
+}

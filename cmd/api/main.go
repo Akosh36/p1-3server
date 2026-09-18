@@ -18,6 +18,7 @@ import (
 
 	"github.com/Akosh36/p1-3server/internal/aclsync"
 	"github.com/Akosh36/p1-3server/internal/auth"
+	"github.com/Akosh36/p1-3server/internal/capdsync"
 	"github.com/Akosh36/p1-3server/internal/config"
 	"github.com/Akosh36/p1-3server/internal/db"
 	"github.com/Akosh36/p1-3server/internal/discovery"
@@ -62,6 +63,7 @@ func main() {
 	go discovery.Run(ctx, pool, cfg.NetdiscSocket, 5*time.Second)
 	go aclsync.Run(ctx, pool, cfg.FwctlSocket, 2*time.Second)
 	go lbsync.Run(ctx, pool, cfg.LbdSocket, 3*time.Second)
+	go capdsync.Run(ctx, pool, cfg.CapdSocket, cfg.CaptureDir, 2*time.Second)
 
 	srv := httpapi.New(pool, cfg)
 	httpServer := &http.Server{

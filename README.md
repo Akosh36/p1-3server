@@ -31,8 +31,8 @@ kira olmaydi (default-deny).
 | Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ✅ Tayyor |
 | Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ✅ Tayyor |
 | Phase 5 | `backendagentd` — backend serverlar metrikasi (push-agent) | ✅ Tayyor |
-| Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ Keyingi |
-| Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ |
+| Phase 6 | `capd` — on-demand pcap yozib olish | ✅ Tayyor |
+| Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ Keyingi |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
 fayli, SNMP (boshqariladigan switch) va hostapd (lokal WiFi) orqali avtomatik
@@ -83,6 +83,31 @@ tokenni yangilash eskisini darhol ishlamay qo'ydi, va Serverlar sahifasida
 (haqiqiy brauzerda, Playwright orqali) token nusxalash va jonli
 CPU/RAM/Disk grafigi konsolda xatosiz ishlashi tasdiqlandi.
 
+Endi Userlar sahifasidagi "● Trafik yozish" tugmasi haqiqatan ishlaydi:
+`capd` bosilgan qurilmaning MAC manzili bo'yicha real `tcpdump` jarayonini
+ishga tushirib, LAN interfeysidagi trafigini `.pcap` formatida yozadi
+(Wireshark'da to'g'ridan-to'g'ri ochiladi). Fayl hajmi yoki vaqt chegarasiga
+yetganda avtomatik yangi faylga o'tadi, "Yuklab olish" bosilganda esa joriy
+fayl darhol yakunlanib yuklanadi va yozish yangi faylda davom etadi — hech
+qachon "yozish to'xtab qoladi" degan holat yo'q, faqat admin "To'xtatish"ni
+bosgandagina. Umumiy disk kvotasidan oshib ketilsa, eng eski tugallangan
+fayllar avtomatik o'chiriladi (joriy yozilayotgan fayl hech qachon
+o'chirilmaydi). `netdiscd`/`fwctl`/`lbd`/`backendagentd` kabi `capd` ham
+Postgres'ga bevosita ulanmaydi — `internal/capdsync` barcha qaror va
+fayl-nomlash mantig'ini o'z ichiga oladi, `capd` esa faqat buyruqni bajaradi.
+`ip netns` orqali haqiqiy veth juftligida haqiqiy ICMP/TCP trafik bilan
+sinaldi: MAC filtri ikkala yo'nalishdagi trafikni to'g'ri tutib olishi,
+hajm/vaqt bo'yicha avtomatik rotatsiya, "Yuklab olish" orqali qo'lda
+rotatsiya, aniq "To'xtatish", va disk kvotasi bo'yicha eng eski fayllarni
+o'chirish — hammasi haqiqiy Postgres + haqiqiy `cmd/api` + haqiqiy `capd`
+bilan uchtan-uchgacha, va Userlar/Logs sahifalari haqiqiy brauzerda
+(Playwright) tekshirildi. Shu qattiq sinov davomida real concurrency
+xatosi topilib tuzatildi: `Stop()` va fon jarayoni ikkalasi ham bir xil
+`tcpdump` jarayoni ustida `Wait()`ni bir vaqtda chaqirishga urinardi (Go'ning
+`os/exec` paketi buni taqiqlaydi) — kam trafikda bu sezilmasdi, lekin
+og'ir trafikda (5 MB fayl uzatilganda) `/captures/{id}/stop` chaqiruvi
+abadiy osilib qolardi.
+
 ## Loyiha tuzilmasi
 
 ```
@@ -92,6 +117,7 @@ cmd/fwctl/             nftables ACL enforcement daemoni (Phase 2) entrypoint
 cmd/lbd/               L4 load balancer daemoni (Phase 4) entrypoint
 cmd/backendagentd/     Backend server metrikasi push-agenti (Phase 5) entrypoint —
                        gateway'da emas, har bir backend serverda ishlaydi
+cmd/capd/              On-demand pcap yozib olish daemoni (Phase 6) entrypoint
 internal/
   config/              Muhit o'zgaruvchilarini o'qish
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
@@ -107,6 +133,11 @@ internal/
   aclsync/               API tomonida access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
   lb/                  lbd'ning VIP/proksi/health-check/manager + Unix-socket serveri
   lbsync/               API tomonida server_groups/backend_servers'ni Postgres'dan o'qib lbd'ga push qiluvchi va sog'liqni orqaga yozuvchi
+  capd/                capd: manager.go (tcpdump jarayon boshqaruvi), quota.go
+                       (disk kvotasi), validate.go (MAC/yo'l tekshiruvi),
+                       server.go (Unix-socket)
+  capdsync/             API tomonida: traffic_captures'ni boshqaruvchi, capd'ga
+                        start/stop yuboruvchi, rotatsiya/kvota holatini yozuvchi
 web/                   React + TypeScript + Vite admin paneli
 deploy/
   docker/              Control-plane uchun Dockerfile'lar va docker-compose.yml

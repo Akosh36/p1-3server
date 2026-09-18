@@ -54,3 +54,29 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
 }
+
+// Separate from request<T>() because a capture download's body is a binary
+// pcap file, not JSON — trying to JSON.parse it would throw.
+export async function downloadFile(path: string): Promise<{ blob: Blob; filename: string }> {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const res = await fetch(`/api${path}`, { headers })
+  if (!res.ok) {
+    const text = await res.text()
+    let message = `Request failed with status ${res.status}`
+    try {
+      message = JSON.parse(text)?.error ?? message
+    } catch {
+      // response wasn't JSON — keep the generic message
+    }
+    throw new ApiError(res.status, message)
+  }
+
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const match = disposition.match(/filename="?([^"]+)"?/)
+  const filename = match?.[1] ?? 'capture.pcap'
+  const blob = await res.blob()
+  return { blob, filename }
+}
