@@ -70,6 +70,39 @@ func TestBuildRuleset_NormalizesCaseAndSortsForStableDiffs(t *testing.T) {
 	}
 }
 
+func TestBuildRuleset_NoWANInterfaceMeansNoGatewayMode(t *testing.T) {
+	ruleset := BuildRuleset(RulesetConfig{}, DesiredState{AdminMACs: []string{"aa:bb:cc:dd:ee:01"}})
+	mustNotContain(t, ruleset, "nat_postrouting")
+	mustNotContain(t, ruleset, "masquerade")
+	mustNotContain(t, ruleset, "iifname")
+}
+
+func TestBuildRuleset_WANInterfaceAddsNATAndHardening(t *testing.T) {
+	ruleset := BuildRuleset(
+		RulesetConfig{TableName: "p13test", ManagementPorts: []int{8080}, WANInterface: "eth0"},
+		DesiredState{UserMACs: []string{"aa:bb:cc:dd:ee:01"}, AdminMACs: []string{"11:22:33:44:55:66"}},
+	)
+
+	mustContain(t, ruleset, `add chain inet p13test nat_postrouting { type nat hook postrouting priority srcnat; }`)
+	mustContain(t, ruleset, `add rule inet p13test nat_postrouting oifname "eth0" masquerade`)
+
+	// Every MAC-allow rule in both chains must reject the WAN interface as
+	// the arriving interface, or a spoofed MAC coming from the internet
+	// side would still match.
+	mustContain(t, ruleset, `lan_forward iifname != "eth0" ether saddr @allowed_admin_mac`)
+	mustContain(t, ruleset, `lan_forward iifname != "eth0" ether saddr @allowed_user_mac`)
+	mustContain(t, ruleset, `management_input iifname != "eth0" ether saddr @allowed_admin_mac`)
+
+	// The NAT chain must be part of the same flush+rebuild transaction as
+	// everything else, or it could silently fall out of sync on a partial
+	// apply.
+	flushIdx := strings.Index(ruleset, "flush table")
+	natIdx := strings.Index(ruleset, "nat_postrouting")
+	if flushIdx < 0 || natIdx < 0 || flushIdx > natIdx {
+		t.Fatalf("expected nat_postrouting to be built after the table flush, got:\n%s", ruleset)
+	}
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {

@@ -40,7 +40,20 @@ func main() {
 	rulesetCfg := firewall.RulesetConfig{
 		TableName:       envString("FWCTL_TABLE_NAME", "p13server"),
 		ManagementPorts: envIntList("FWCTL_MANAGEMENT_PORTS", []int{22, 8080}),
+		WANInterface:    envString("FWCTL_WAN_INTERFACE", ""),
 	}
+
+	if rulesetCfg.WANInterface != "" {
+		// Gateway mode (Phase 3): without this, nftables' forward chain
+		// never even sees LAN->internet packets — the kernel drops them
+		// before the netfilter forward hook runs at all.
+		if err := firewall.EnableIPForwarding(); err != nil {
+			slog.Error("failed to enable IP forwarding — refusing to start in gateway mode without it", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("fwctl: gateway mode enabled", "wan_interface", rulesetCfg.WANInterface)
+	}
+
 	manager := firewall.NewManager(rulesetCfg)
 
 	baselineCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

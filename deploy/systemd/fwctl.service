@@ -23,6 +23,11 @@ Environment=FWCTL_TABLE_NAME=p13server
 # Comma-separated TCP ports on THIS host that only admin-MAC traffic may
 # reach (the "o'rtadagi server" — the control-plane API, SSH, ...).
 Environment=FWCTL_MANAGEMENT_PORTS=22,8080
+# Phase 3: set this to your internet-facing interface to turn this host
+# into the LAN's actual gateway (NAT/masquerade + WAN-side hardening on
+# every MAC-allow rule). Leave unset to keep Phase 2 behavior (LAN access
+# control only, no internet forwarding).
+#Environment=FWCTL_WAN_INTERFACE=eth0
 
 RuntimeDirectory=p13server
 RuntimeDirectoryMode=0770

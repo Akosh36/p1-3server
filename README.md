@@ -28,8 +28,8 @@ kira olmaydi (default-deny).
 | Phase 0 | DB sxema, auth (JWT+bcrypt+TOTP), RBAC (super_admin/admin), core API, admin panel (7 bo'lim) | ✅ Tayyor |
 | Phase 1 | `netdiscd` — LAN qurilmalarini avtomatik topish (ARP/DHCP/SNMP/hostapd) | ✅ Tayyor |
 | Phase 2 | `fwctl` — nftables ACL sinxronizatsiyasi, DDoS himoyasi | ✅ Tayyor |
-| Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ⏳ Keyingi |
-| Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ⏳ |
+| Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi | ✅ Tayyor |
+| Phase 4 | `lbd` — L4 load balancer, VIP-per-guruh | ⏳ Keyingi |
 | Phase 5 | Backend serverlar metrikasi | ⏳ |
 | Phase 6 | `capd` — on-demand pcap yozib olish | ⏳ |
 | Phase 7 | WireGuard (masofaviy Wireless LAN) | ⏳ |
@@ -41,9 +41,16 @@ sinaldi). LAN sahifasida admin har bir topilgan qurilmaga nickname va
 User/Admin huquq bera oladi, va bu huquq endi **`fwctl` orqali nftables
 darajasida haqiqatan kuchga kiradi**: default-deny, User → faqat load
 balancing (forward), Admin → load balancing + "o'rtadagi server" (input),
-DDoS baseline meter'lari bilan. Butun zanjir (Postgres → aclsync → fwctl →
-nftables → real trafik) `ip netns` orqali qurilgan izolyatsiyalangan
-topologiyada haqiqiy paketlar bilan sinaldi.
+DDoS baseline meter'lari bilan. `fwctl` endi shu bilan bir qatorda **haqiqiy
+gateway** ham bo'la oladi: `FWCTL_WAN_INTERFACE` sozlansa, LAN qurilmalari
+uchun NAT (masquerade) qo'shiladi va har bir ruxsat qoidasiga WAN
+interfeysidan kelgan (potentsial soxta MAC) trafikni bloklovchi himoya
+qo'shiladi. DHCP endi haqiqiy `dnsmasq` orqali beriladi (`deploy/dnsmasq/`).
+Butun zanjir (DHCP → Postgres → aclsync → fwctl → nftables NAT → real
+"internet" trafik) `ip netns` orqali qurilgan 3-tugunli izolyatsiyalangan
+topologiyada haqiqiy paketlar bilan sinaldi — internet-tomon serverning o'z
+logi LAN mijozining haqiqiy IP'si emas, gateway'ning WAN IP'sini ko'rsatishi
+orqali NAT tasdiqlandi.
 
 ## Loyiha tuzilmasi
 
@@ -66,6 +73,7 @@ web/                   React + TypeScript + Vite admin paneli
 deploy/
   docker/              Control-plane uchun Dockerfile'lar va docker-compose.yml
   systemd/             Data-plane daemonlar uchun systemd unit fayllari (bosqichma-bosqich)
+  dnsmasq/             Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiya namunasi
 docs/deploy.md          To'liq deploy qo'llanmasi
 ```
 

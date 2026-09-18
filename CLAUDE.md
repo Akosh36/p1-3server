@@ -189,7 +189,7 @@ push qiladi — **Phase 2, tayyor va real sinaldi**, bo'lim 8'ga qarang.
 | Data-plane daemonlar | **Go** | Yagona binary, past xotira, systemd bilan integratsiya, root-level tarmoq ishlari uchun standart |
 | Control-plane API | **Go** (chi router) | Daemon'lar bilan bitta til — kod bazasi bir xil |
 | Ma'lumotlar bazasi | **PostgreSQL 16** (+ TimescaleDB, ixtiyoriy) | Relyatsion + vaqt-qatori ma'lumot bitta DB'da |
-| DHCP | **dnsmasq** | Yengil, ishonchli (lease fayli Phase 1'da o'qiladi; DHCP serverning o'zi hali ulanmagan — Phase 3) |
+| DHCP | **dnsmasq** | Yengil, ishonchli — Phase 3'da haqiqiy DHCP server sifatida sinaldi (lease fayli Phase 1'dan beri o'qiladi) |
 | Tarmoq topish | **ARP jadvali + `gosnmp`** (IF-MIB/BRIDGE-MIB) + hostapd control socket | Phase 1'da tayyor, real sinaldi |
 | Firewall | **nftables** | Zamonaviy Linux standarti, named sets — Phase 2'da tayyor va real sinaldi |
 | L4 Load Balancer | Custom **Go** (`lbd`) | TCP proxy, VIP-per-guruh (hali yozilmagan — Phase 4) |
@@ -261,8 +261,9 @@ internal/
   netdisc/                netdiscd kollektorlari: arp.go, dnsmasq.go, snmp.go, hostapd.go,
                            store.go (thread-safe in-memory holat), server.go (Unix-socket JSON)
   discovery/              API tomonida: netdiscd snapshot'ini pull qilib Postgres'ga upsert
-  firewall/               fwctl: ruleset.go (nft matn generator, pure func), apply.go (nft -f
-                           chaqiradi), manager.go (state + serialize), server.go (Unix-socket)
+  firewall/               fwctl: ruleset.go (nft matn generator, pure func, NAT+WAN qattiqlashtirish
+                           shu yerda), apply.go (nft -f chaqiradi), gateway.go (ip_forward yoqadi),
+                           manager.go (state + serialize), server.go (Unix-socket)
   aclsync/                API tomonida: access_grants'ni Postgres'dan o'qib fwctl'ga push qiluvchi
 web/                      React + TypeScript + Vite admin paneli
   src/api/                client.ts (fetch wrapper), types.ts
@@ -274,7 +275,9 @@ deploy/
   docker/                 api.Dockerfile, web.Dockerfile, docker-compose.yml (control-plane)
   systemd/netdiscd.service  netdiscd uchun tayyor unit fayl
   systemd/fwctl.service   fwctl uchun tayyor unit fayl
-  nftables/, dnsmasq/     Qolgan data-plane uchun — bosqichma-bosqich to'ldiriladi
+  dnsmasq/p13server.conf.example  Haqiqiy DHCP server uchun tayyor dnsmasq konfiguratsiyasi
+  nftables/               Bo'sh — nftables qoidalari kod orqali (internal/firewall) generatsiya
+                           qilinadi, statik fayl sifatida saqlanmaydi
 docs/deploy.md            To'liq deploy qo'llanmasi (control-plane vs data-plane)
 README.md                 Loyiha holati jadvali + tezkor ishga tushirish
 ```
@@ -418,13 +421,57 @@ README.md                 Loyiha holati jadvali + tezkor ishga tushirish
   yuqori oqimda (upstream) scrubbing kerak, bu doirasidan tashqarida.
   `lbd` (Phase 4) hali yo'qligi sababli hozircha `lan_forward`dagi "ruxsat
   berilgan" trafik biror haqiqiy load-balancing serverga emas, faqat
-  gateway orqali umuman forward qilinishga ruxsat beradi.
+  gateway orqali umuman forward qilinishga (Phase 3'dan keyin — internetga
+  ham) ruxsat beradi.
+
+### ✅ Phase 3 — tayyor va real sinaldi (haqiqiy dnsmasq DHCP + NAT + `ip netns`)
+
+- **DHCP** — alohida Go daemon yozilmadi (qaror #4: tayyor vositalar
+  ustida qurish): `deploy/dnsmasq/p13server.conf.example` — haqiqiy
+  `dnsmasq` paketini LAN interfeysida DHCP server sifatida ishga
+  tushiradigan, hujjatlashtirilgan konfiguratsiya namunasi. Lease fayli
+  yo'li Phase 1'dagi `netdiscd` allaqachon o'qiydigan yo'l bilan bir xil —
+  hech narsa qayta ulanmaydi.
+- **NAT + gateway qattiqlashtirish** — `internal/firewall`ga qo'shildi
+  (`RulesetConfig.WANInterface`):
+  - `EnableIPForwarding()` (`internal/firewall/gateway.go`) — fwctl
+    ishga tushganda `net.ipv4.ip_forward=1`ni o'rnatadi (buning
+    o'zisiz kernel paketlarni forward zanjiriga umuman yubormaydi).
+  - `nat_postrouting` zanjiri (`type nat hook postrouting`) — WAN
+    interfeysidan chiqayotgan trafikni masquerade qiladi.
+  - **Har bir** MAC-ruxsat qoidasiga (`lan_forward` HAM
+    `management_input`da) `iifname != <wan>` qo'shildi — MAC ro'yxati
+    yolg'iz o'zi WAN tomonidan kelayotgan soxta MAC'ni to'xtata olmaydi;
+    bu qoida "o'rtadagi server" internetdan **hech qachon** ochilmasligini
+    kafolatlaydi.
+- **Sinov — Phase 1/2'dan ham bir qadam oldinga:** `lan`↔`gw`↔`wan` (3
+  namespace) topologiyasi qurilib, `gw`da **haqiqiy `dnsmasq`** DHCP
+  server sifatida ishga tushirildi. `lan`dagi qurilma **haqiqiy
+  `udhcpc`** orqali IP oldi (real DISCOVER/OFFER/REQUEST/ACK almashinuvi),
+  va lease fayli aynan Phase 1 parseri kutgan formatda chiqdi. Keyin butun
+  kirish+NAT matritsasi haqiqiy `curl` trafigi bilan tekshirildi:
+  ro'yxatsiz → bloklangan, user → internetga chiqadi (NAT bilan) lekin
+  boshqaruv portiga yo'q, admin → ikkalasi ham bor, **bekor qilish →
+  yana bloklangan**. NAT ishlashi ikki mustaqil usulda tasdiqlandi:
+  conntrack jadvalida va — eng ishonchlisi — "internet" serverining o'z
+  HTTP access logida: har bir so'rov LAN mijozining haqiqiy IP'si
+  (`10.0.1.81`) emas, **gateway'ning WAN IP'si** (`203.0.113.1`) sifatida
+  qayd etildi. WAN-tomon qattiqlashtirish alohida tekshirildi: `wan`
+  namespace'ning interfeys MAC manzili ataylab ruxsat berilgan admin
+  MAC'iga o'zgartirildi va shunda ham boshqaruv portiga kirish bloklanishi
+  tasdiqlandi — ya'ni bu himoya haqiqatan `iifname`ga tayanadi, faqat
+  MAC to'plamiga emas.
+- **Bilingan cheklovlar:** WAN interfeysi orqali real internetga ulanish
+  (masalan PPPoE, DHCP-client WAN tomonida) sinalmadi — bu sof Linux
+  tarmoq konfiguratsiyasi masalasi, fwctl/nftables mantig'iga aloqasi yo'q.
+  hostapd'ning DHCP integratsiyasi (WiFi mijozlariga IP berish) alohida
+  ko'rib chiqilmadi — odatda bitta dnsmasq bir nechta interfeysga xizmat
+  qila oladi, konfiguratsiya namunasida eslatilgan.
 
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
 | Bosqich | Nima | Fayllar (hali yo'q) |
 |---|---|---|
-| Phase 3 | Gateway/DHCP/NAT to'liq integratsiyasi, "o'rtadagi server"ga faqat admin guruhidan kirish qoidasi | — |
 | Phase 4 | `lbd` — haqiqiy L4 TCP load balancer, VIP-per-guruh | `cmd/lbd/` |
 | Phase 5 | Backend serverlar metrikasi (agent yoki SNMP/SSH orqali) | — |
 | Phase 6 | `capd` — on-demand pcap yozib olish, rotatsiya, kvota | `cmd/capd/` |
@@ -524,16 +571,20 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 ## 12. Keyingi qadam
 
-Phase 1 (`netdiscd`) va Phase 2 (`fwctl`) tayyor va real sinaldi — bo'lim
-8'ga qarang. LAN sahifasida huquq berish endi **haqiqatan** tarmoq
-darajasida (nftables) kuchga kiradi. Navbatdagi ish — **Phase 3: Gateway/
-DHCP/NAT to'liq integratsiyasi**: bu server LAN'ning haqiqiy shlyuzi
-bo'lishi uchun dnsmasq'ni DHCP server sifatida ishga tushirish (hozir
-faqat lease faylini o'qiydi — Phase 1), NAT/masquerade qoidalarini
-qo'shish, va "o'rtadagi server"ga (bu boshqaruv serverining o'zi) faqat
-admin guruhidan kirish qoidasini `fwctl`ning `management_input` zanjiri
-bilan to'liq moslashtirish (portlar hozircha `FWCTL_MANAGEMENT_PORTS`
-orqali qo'lda beriladi — buni haqiqiy API/panel portlariga avtomatik
-moslashtirish kerak bo'lishi mumkin). Har bosqich tugagach ushbu faylni
-va `README.md`/`docs/deploy.md`ni
-yangilab borish tavsiya etiladi.
+Phase 1 (`netdiscd`), Phase 2 (`fwctl`) va Phase 3 (Gateway/DHCP/NAT)
+tayyor va real sinaldi — bo'lim 8'ga qarang. Bu server endi to'liq
+ishlaydigan LAN gateway: DHCP beradi, kirish huquqini nazorat qiladi,
+ruxsat berilganlarni internetga NAT bilan chiqaradi. Navbatdagi ish —
+**Phase 4: `lbd`** (`cmd/lbd/`) — haqiqiy L4 TCP load balancer: `server_groups`/
+`backend_servers` jadvalidagi guruhlarni o'qib, har biriga alohida VIP
+(`server_groups.vip_address`) ochib beradigan, round-robin/least-conn
+bilan orqadagi serverlarga trafik taqsimlaydigan daemon. Bu ulangandan
+keyin `lan_forward`dagi "ruxsat berilgan" trafik nihoyat haqiqiy
+load-balancing serverlarga borishi mumkin bo'ladi (hozircha faqat
+gateway orqali umuman forward qilishga ruxsat beriladi — bo'lim 8'dagi
+Phase 2 eslatmasiga qarang). `lbd` ham netdiscd/fwctl kabi Postgres'ga
+ulanmasligi kerak — control-plane (`internal/`) unga guruh/backend
+holatini socket orqali push qilishi, `lbd` esa health-check natijalarini
+(backend_servers.is_healthy) API orqali qaytarib berishi tabiiy davom
+etadigan naqsh bo'ladi. Har bosqich tugagach ushbu faylni va
+`README.md`/`docs/deploy.md`ni yangilab borish tavsiya etiladi.

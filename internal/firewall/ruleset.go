@@ -65,6 +65,21 @@ type RulesetConfig struct {
 	// that only admin-MAC traffic may reach — e.g. the control-plane API
 	// and SSH. Loopback traffic is always allowed regardless.
 	ManagementPorts []int
+
+	// WANInterface is the interface facing the internet (Phase 3: full
+	// gateway mode). When set:
+	//   - LAN->internet forwarded traffic is masqueraded (NAT) behind this
+	//     host's WAN address, so granted devices get real internet access
+	//     through a single public/upstream IP.
+	//   - New forwarded connections must arrive on a *different* interface
+	//     than WANInterface — a MAC allow-list alone can't stop a spoofed
+	//     source MAC arriving from the WAN side, so this closes that gap.
+	//   - Management-port access is refused from WANInterface outright,
+	//     even for an admin MAC: the "o'rtadagi server" must never be
+	//     reachable from the internet side of the gateway.
+	// Left empty, this host still enforces the LAN access matrix (Phase 2
+	// behavior) but does not act as an internet gateway.
+	WANInterface string
 }
 
 type DesiredState struct {
@@ -130,15 +145,25 @@ func BuildRuleset(cfg RulesetConfig, state DesiredState) string {
 	fmt.Fprintf(&b, "add set inet %s user_conn_meter { type ether_addr; flags dynamic; }\n", table)
 	fmt.Fprintf(&b, "add set inet %s mgmt_syn_meter { type ipv4_addr; flags dynamic; }\n", table)
 
+	// notFromWAN is "" when there's no WAN interface configured (nothing to
+	// guard against) or `iifname != "<wan>" ` (trailing space kept) when
+	// there is — spliced directly before the MAC-match in each accept rule
+	// below so a spoofed-MAC packet arriving ON the WAN interface can never
+	// match, whether or not NAT/gateway mode is otherwise active.
+	notFromWAN := ""
+	if cfg.WANInterface != "" {
+		notFromWAN = fmt.Sprintf("iifname != %q ", cfg.WANInterface)
+	}
+
 	fmt.Fprintf(&b, "\nadd chain inet %s lan_forward { type filter hook forward priority filter; policy drop; }\n", table)
 	fmt.Fprintf(&b, "add rule inet %s lan_forward ct state invalid drop\n", table)
 	fmt.Fprintf(&b, "add rule inet %s lan_forward ct state established,related accept\n", table)
-	fmt.Fprintf(&b, "add rule inet %s lan_forward ether saddr @allowed_admin_mac ct state new update @admin_conn_meter { ether saddr limit rate %s burst %s packets } accept\n",
-		table, adminConnRateLimit, adminConnBurst)
-	fmt.Fprintf(&b, "add rule inet %s lan_forward ether saddr @allowed_admin_mac accept\n", table)
-	fmt.Fprintf(&b, "add rule inet %s lan_forward ether saddr @allowed_user_mac ct state new update @user_conn_meter { ether saddr limit rate %s burst %s packets } accept\n",
-		table, userConnRateLimit, userConnBurst)
-	fmt.Fprintf(&b, "add rule inet %s lan_forward ether saddr @allowed_user_mac accept\n", table)
+	fmt.Fprintf(&b, "add rule inet %s lan_forward %sether saddr @allowed_admin_mac ct state new update @admin_conn_meter { ether saddr limit rate %s burst %s packets } accept\n",
+		table, notFromWAN, adminConnRateLimit, adminConnBurst)
+	fmt.Fprintf(&b, "add rule inet %s lan_forward %sether saddr @allowed_admin_mac accept\n", table, notFromWAN)
+	fmt.Fprintf(&b, "add rule inet %s lan_forward %sether saddr @allowed_user_mac ct state new update @user_conn_meter { ether saddr limit rate %s burst %s packets } accept\n",
+		table, notFromWAN, userConnRateLimit, userConnBurst)
+	fmt.Fprintf(&b, "add rule inet %s lan_forward %sether saddr @allowed_user_mac accept\n", table, notFromWAN)
 
 	fmt.Fprintf(&b, "\nadd chain inet %s management_input { type filter hook input priority filter; policy drop; }\n", table)
 	fmt.Fprintf(&b, "add rule inet %s management_input iif lo accept\n", table)
@@ -148,8 +173,18 @@ func BuildRuleset(cfg RulesetConfig, state DesiredState) string {
 	fmt.Fprintf(&b, "add rule inet %s management_input icmpv6 type echo-request limit rate %s accept\n", table, icmpEchoRateLimit)
 	if len(cfg.ManagementPorts) > 0 {
 		ports := formatPortList(cfg.ManagementPorts)
-		fmt.Fprintf(&b, "add rule inet %s management_input ether saddr @allowed_admin_mac tcp dport %s ct state new update @mgmt_syn_meter { ip saddr limit rate %s burst %s packets } accept\n",
-			table, ports, mgmtSynRateLimit, mgmtSynBurst)
+		fmt.Fprintf(&b, "add rule inet %s management_input %sether saddr @allowed_admin_mac tcp dport %s ct state new update @mgmt_syn_meter { ip saddr limit rate %s burst %s packets } accept\n",
+			table, notFromWAN, ports, mgmtSynRateLimit, mgmtSynBurst)
+	}
+
+	// Phase 3: full gateway mode. NAT lives in its own chain (nftables
+	// requires a dedicated `type nat` chain — it can't be folded into
+	// lan_forward's `type filter` chain) but the same atomic flush+rebuild
+	// transaction covers it, so it can never drift out of sync with the
+	// filter rules above.
+	if cfg.WANInterface != "" {
+		fmt.Fprintf(&b, "\nadd chain inet %s nat_postrouting { type nat hook postrouting priority srcnat; }\n", table)
+		fmt.Fprintf(&b, "add rule inet %s nat_postrouting oifname %q masquerade\n", table, cfg.WANInterface)
 	}
 
 	return b.String()

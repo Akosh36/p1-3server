@@ -117,6 +117,61 @@ comments in `internal/firewall/ruleset.go`:
    `add element`, a revoked device's MAC would never actually leave
    `allowed_user_mac`/`allowed_admin_mac`.
 
+### Gateway/DHCP/NAT (Phase 3 — shipped)
+
+Turns this host into the LAN's actual gateway to the internet, on top of
+the Phase 2 access control (nothing about the ACL enforcement changes —
+this only adds forwarding + address translation for devices that already
+passed it).
+
+**DHCP** — dnsmasq itself, configured, not wrapped:
+
+```bash
+sudo cp deploy/dnsmasq/p13server.conf.example /etc/dnsmasq.d/p13server.conf
+sudo $EDITOR /etc/dnsmasq.d/p13server.conf   # set interface=, dhcp-range=,
+                                              # dhcp-option=3/6 for your LAN
+sudo systemctl enable --now dnsmasq
+```
+
+This is the same lease file path (`/var/lib/misc/dnsmasq.leases`) netdiscd
+(Phase 1) already reads — no changes needed on that side. Verified with a
+real dnsmasq instance in a throwaway namespace: a real `udhcpc` DISCOVER →
+OFFER → REQUEST → ACK exchange produced a lease line in the exact format
+`internal/netdisc`'s parser expects.
+
+**NAT + gateway hardening** — set one more env var for fwctl and restart it:
+
+```
+Environment=FWCTL_WAN_INTERFACE=eth0    # your internet-facing interface
+```
+
+When `FWCTL_WAN_INTERFACE` is set, `internal/firewall.BuildRuleset` adds:
+
+- `net.ipv4.ip_forward=1` (fwctl sets this itself on startup — without it
+  the kernel never hands packets to the forward chain at all, regardless
+  of nftables rules).
+- A `nat_postrouting` chain (`type nat hook postrouting`) that masquerades
+  everything leaving via the WAN interface — LAN devices reach the
+  internet behind this host's single WAN address, exactly like a normal
+  home router.
+- `iifname != <wan>` prepended to **every** MAC-allow rule in both
+  `lan_forward` and `management_input`. A MAC allow-list alone can't stop
+  a spoofed source MAC arriving ON the WAN interface — this closes that
+  gap so the "o'rtadagi server" (management ports) and LAN-only forwarding
+  can never be reached from the internet side, even by an attacker who
+  somehow knows an admin's real MAC.
+
+**Verified with real traffic across a 3-namespace gateway topology**
+(`lan` ↔ `gw` running the real dnsmasq + fwctl + NAT ↔ `wan` simulating the
+internet): the DHCP-assigned LAN client was blocked until granted, then
+reached the "internet" host once granted — with the internet host's own
+access log confirming every request arrived from the **gateway's WAN
+address**, never the LAN client's real IP. Revoking access blocked it
+again. Separately, the WAN-hardening rule was tested by setting the WAN
+namespace's own interface MAC to match a granted admin's MAC and
+confirming management access was still refused — proving the `iifname`
+guard, not just the MAC set, is what's stopping it.
+
 ### Still not shipped: lbd (Phase 4), capd (Phase 6)
 
 Each adds:

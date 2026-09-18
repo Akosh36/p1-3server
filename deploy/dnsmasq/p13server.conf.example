@@ -1,0 +1,42 @@
+# dnsmasq config for p13server's DHCP server (Phase 3).
+#
+# Copy to /etc/dnsmasq.d/p13server.conf and fill in the values for your LAN,
+# then `sudo systemctl enable --now dnsmasq` (the stock Ubuntu dnsmasq
+# package's own systemd unit — there is no p13server-specific dnsmasq unit,
+# we only configure the real thing per decision #4 in CLAUDE.md).
+#
+# netdiscd (Phase 1) already reads this exact lease file path to learn
+# hostnames — nothing else to wire up on that side.
+
+# --- Bind only to the LAN-facing interface ---
+# Never let dnsmasq listen on the WAN interface: it must not hand out
+# leases or answer DNS queries from the internet side of the gateway.
+interface=eth1
+bind-interfaces
+
+# --- DHCP range for the LAN ---
+# <range-start>,<range-end>,<netmask>,<lease-time>
+dhcp-range=192.168.1.50,192.168.1.199,255.255.255.0,12h
+
+# --- Options handed to every LAN client ---
+# option 3 = default gateway (this host's LAN-facing IP)
+dhcp-option=3,192.168.1.1
+# option 6 = DNS server(s) — this host itself (dnsmasq also serves DNS), or
+# point at 1.1.1.1/8.8.8.8 if you don't want dnsmasq answering DNS queries.
+dhcp-option=6,192.168.1.1
+
+# --- Lease file (netdiscd's NETDISC_DNSMASQ_LEASE_FILE reads this path) ---
+dhcp-leasefile=/var/lib/misc/dnsmasq.leases
+
+# --- Logging (useful while setting the LAN up; noisy long-term) ---
+#log-dhcp
+
+# --- Optional: static reservations for known devices ---
+# dhcp-host=aa:bb:cc:dd:ee:01,192.168.1.10,office-printer
+
+# Everything below this line is deliberately NOT configured here:
+#   - Upstream DNS forwarding / DNSSEC: use the host's own /etc/resolv.conf
+#     defaults unless you have a reason to change them.
+#   - Wireless (hostapd) DHCP: hostapd manages its own interface; point a
+#     second `interface=` line at it if the AP shares this same dnsmasq
+#     instance, or run a second dnsmasq instance for it.
