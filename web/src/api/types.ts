@@ -7,6 +7,8 @@ export interface Admin {
   id: number
   username: string
   role: AdminRole
+  allowed_ip?: string
+  allowed_mac?: string
   is_active: boolean
   created_at: string
   last_login_at?: string

@@ -666,6 +666,96 @@ per-switch only, not per-VLAN, even though `switch_ports.vlan` exists —
 this sandbox has no VLAN-aware switch to validate finer-grained grouping
 against, and the spec doesn't call for it.
 
+### Security audit (Phase 10 — shipped)
+
+A manual code review of the whole codebase (every route's auth grouping,
+the auth package, request validation, error messages) plus automated
+checks (`npm audit`, dependency version review — `govulncheck` itself
+couldn't reach `vuln.go.dev` from this environment; run it in CI where
+network egress isn't restricted) against SQL injection, XSS, CSRF, path
+traversal, and mass assignment. No code changes were needed for any of
+those — parameterized queries throughout, no `dangerouslySetInnerHTML`,
+bearer-token auth (not cookies, so no CSRF surface), server-generated
+capture file paths, and `DisallowUnknownFields()` plus per-endpoint typed
+request structs already ruled them out.
+
+**What did need fixing, most serious first:**
+
+- **`requireAuth` never re-checked Postgres.** It validated a JWT's
+  signature and expiry only, so a deleted or deactivated admin's existing
+  token kept working for up to `JWT_TOKEN_TTL` (default 12h) after the
+  fact. It now re-reads `is_active`/`role` on every request — one indexed
+  lookup, an acceptable cost at this platform's scale (a handful of
+  admins, not a public high-QPS API) for closing a real privilege-
+  persistence window.
+- **No rate limiting on `/api/auth/login`.** Nothing stopped unlimited
+  password or TOTP guessing. `internal/httpapi/loginlimiter.go` now
+  blocks a source IP after 5 failed attempts within 5 minutes (in-memory;
+  this runs on one gateway host, not a fleet) — decision #16's "smart
+  defaults" applied to the login endpoint, not just nftables.
+- **No audit trail for login attempts.** Only `last_login_at` existed,
+  silently overwritten on each success, with no record of failures at
+  all. Every attempt — success or failure, with a reason (unknown
+  username, wrong password, bad 2FA, IP/MAC pin failure) — is now an
+  `audit_logs` row. The reason is internal only; the client still gets
+  the same generic "invalid username or password" for anything before a
+  correct password (this now includes what used to be a distinct
+  "account disabled" message, closing a minor account-enumeration path).
+- **No minimum password length anywhere a password is set** (admin
+  creation, the new update endpoint below, and the bootstrap super_admin
+  in `cmd/api`). `auth.MinPasswordLength` (8) is now enforced in all
+  three places from one constant.
+- **No way to manage an admin account after creating it.** `PATCH
+  /api/admins/{id}` (super_admin only) is new: deactivate instead of
+  hard-deleting (a `DELETE` nulls `audit_logs.actor_admin_id` for that
+  admin's past actions; deactivating preserves the link), rotate a
+  password, change role, and set the IP/MAC login pin below.
+- **Deleting/deactivating/demoting the last active super_admin was
+  possible**, which would have permanently locked the panel out of its
+  own admin-management endpoints. Both `DELETE` and `PATCH` now refuse
+  that operation.
+- **Decision #7's IP/MAC login restriction was never implemented.**
+  `admins.allowed_ip`/`allowed_mac` have existed in the schema since
+  Phase 0 but `handleLogin` never read, let alone checked, them. It now
+  does, as the last gate before issuing a token (after password and TOTP
+  — like TOTP's own failure message, a specific "can't log in from this
+  network/device" response here isn't an enumeration risk, since the
+  caller already proved they know the password). IP matching uses
+  Postgres's own `INET` containment operator (`<<=`), so both a single
+  address and a CIDR range work. MAC matching resolves the request's
+  source IP against the `devices` table — populated by netdiscd's real
+  ARP discovery (Phase 1) — rather than reading `/proc/net/arp` directly
+  from `cmd/api`, which would need host network privileges this process
+  is deliberately never given (see the privilege split in CLAUDE.md §4).
+  An IP netdiscd has never resolved to a MAC fails closed when
+  `allowed_mac` is set.
+
+**Verified against a real Postgres and a real `cmd/api`, not just unit
+tests:** 5 failed logins from one IP got `401`, the 6th (even with the
+correct password) got `429`; each failure produced an `audit_logs` row
+with its real reason, a success produced `auth.login_success`; a freshly
+deactivated admin's still-unexpired JWT was rejected on its very next
+request; the only active super_admin's account refused self-deactivation,
+self-demotion, and self-deletion; an admin scoped to `allowed_ip:
+10.0.0.0/24` was refused from `127.0.0.1` and admitted once updated to
+`127.0.0.1`; an admin scoped to a specific `allowed_mac` was refused until
+a real `devices` row with a matching IP→MAC mapping existed. The Admins
+page was checked in a real headless browser: the new IP/MAC column and
+active/deactivated toggle render and update live, with zero console
+errors.
+
+**Known limitations:** `govulncheck` couldn't run here (network policy
+blocks `vuln.go.dev`); `go.mod`'s dependency versions were reviewed by
+hand and look current, but running it for real in CI is recommended.
+`ALLOWED_ORIGINS` still defaults to `*` — not practically exploitable
+today since the JWT travels in an `Authorization` header and lives in
+`localStorage` rather than a cookie (the classic CORS+credentials attack
+needs a cookie SOP would otherwise attach automatically), but production
+deployments should still set it to the real panel origin. There is no
+JWT revocation list, but the `requireAuth` fix above makes one largely
+unnecessary here: a revoked admin's access ends on their very next
+request, not just at natural token expiry.
+
 ## Local development (no Docker)
 
 ```bash

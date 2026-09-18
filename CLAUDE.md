@@ -216,6 +216,10 @@ bilan `system_metrics`/`backend_metrics`ga `gpu_percent`/`gpu_mem_percent`
 ```
 admins(id, username, password_hash, totp_secret, role[super_admin|admin],
        allowed_ip, allowed_mac, created_by, is_active, created_at, last_login_at)
+  -- allowed_ip/allowed_mac Phase 0'dan beri sxemada bor edi (qaror #7),
+  -- lekin Phase 10'gacha hech qachon handleLogin'da tekshirilmagan edi —
+  -- shu bosqichda birinchi marta haqiqiy ma'no oldi (PATCH /api/admins/{id}
+  -- orqali sozlanadi, INET/MACADDR validatsiyasi bilan)
 
 devices(id, mac_address UNIQUE, ip_address, hostname, nickname,
         conn_type[wired|wireless_local|wireless_remote_vpn],
@@ -296,7 +300,10 @@ internal/
   db/                     Postgres ulanish (pgxpool) + o'rnatilgan migratsiyalar
   models/                 Domen tiplari (Admin, Device, ServerGroup, ...)
   auth/                   JWT, bcrypt, TOTP
-  httpapi/                HTTP handlerlar, middleware, router (chi)
+  httpapi/                HTTP handlerlar, middleware, router (chi); Phase 10:
+                           requireAuth har so'rovda is_active/role'ni Postgres'dan
+                           qayta o'qiydi, loginlimiter.go — IP bo'yicha login
+                           tezlik cheklovi, handleLogin — audit + IP/MAC cheklovi
   hostmetrics/            CPU/RAM/Disk/Net sampler (gopsutil) — internal/metrics VA
                            cmd/backendagentd ikkalasi ham shu yerdan foydalanadi;
                            gpu.go (Phase 8) — nvidia-smi asosida GPU foizi, topilmasa nil
@@ -1191,11 +1198,168 @@ har bir VLAN uchun alohida tarmoq qatori yaratilmaydi (bu sandbox'dagi
 sinov muhitida haqiqiy VLAN-aware switch yo'qligi va spetsifikatsiyaning
 bunga aniq talab qo'ymagani uchun soddaroq shakl tanlandi).
 
+### ✅ Phase 10 — tayyor va real sinaldi (qo'lda kod review + avtomatlashtirilgan skanerlar + real Postgres/API/brauzer bilan)
+
+Foydalanuvchi bilan qamrov aniqlashtirilgach ("barchasi birga: qo'lda
+review + avtomatik skaner + maqsadli zaiflik qidiruvi, topilganlarni
+darhol tuzatish"), butun kod bazasi RBAC qamrovi, autentifikatsiya
+oqimi, va audit log to'liqligi bo'yicha qo'lda ko'rib chiqildi.
+**Eng muhim topilma**: bo'lim 3'dagi qaror #7 ("Login+parol + IP/MAC
+cheklovi — ikki qatlamli") — `admins.allowed_ip`/`allowed_mac` ustunlari
+Phase 0'dan beri sxemada bor edi, lekin **hech qachon, hech qanday kodda
+tekshirilmagan edi**. Bu — Phase 0'dan beri "bajarilgan" deb
+hisoblangan, aslida hech qachon yozilmagan yagona arxitektura qarori.
+
+**Topilib tuzatilgan real zaifliklar:**
+
+1. **`requireAuth` JWT'ni Postgres bilan hech qachon qayta tekshirmasdi**
+   (eng jiddiy topilma). Token faqat imzo va muddatga qarab tasdiqlanardi
+   — o'chirilgan yoki faolsizlantirilgan admin'ning eski tokeni
+   `JWT_TOKEN_TTL` (standart 12 soat) davomida **ishlashda davom etardi**.
+   Endi har bir so'rovda `is_active`/`role` Postgres'dan qayta o'qiladi
+   (bitta indekslangan qidiruv — bu platforma miqyosida arzon xarajat) va
+   token'dagi eskirgan rol emas, bazadagi haqiqiy rol ishlatiladi.
+2. **`/api/auth/login`da hech qanday tezlik cheklovi yo'q edi** — parol
+   yoki 2FA kodini cheksiz taxmin qilish mumkin edi. Qaror #16'ning
+   "aqlli standart qiymatlar" tamoyili endi nftables tashqarisida, login
+   endpoint'ida ham qo'llanildi: bitta IP manzildan 5 daqiqada 5 marta
+   muvaffaqiyatsiz urinishdan keyin (xotirada saqlanadigan, jarayon
+   ichidagi hisoblagich — bu bitta gateway host, tarqoq flot emas) `429`
+   qaytariladi.
+3. **Autentifikatsiya voqealari umuman audit qilinmasdi** — faqat
+   `last_login_at` bor edi, u har safar jimgina qayta yozilardi, muvaffaqiyatsiz
+   urinishlar haqida umuman iz qolmasdi. Endi har bir urinish — muvaffaqiyatli
+   **va** muvaffaqiyatsiz (sababi bilan: noma'lum login, noto'g'ri parol,
+   noto'g'ri 2FA, ruxsat etilmagan tarmoq/qurilma) — `audit_logs`ga
+   yoziladi. Xabar matni tashqariga hamon umumiy ("invalid username or
+   password") qoladi — bu **hisob mavjudligini oshkor qilmaslik** uchun —
+   lekin `details` ustunidagi haqiqiy sabab keyinchalik tergov uchun saqlanadi.
+   **Bitta xulq-atvor o'zgarishi**: ilgari "account disabled" alohida xabar
+   qaytarardi (bu hisobning borligini va o'chirilganini oshkor qilardi) —
+   endi bu ham umumiy xabarga qo'shildi.
+4. **Admin parolining minimal uzunligi yo'q edi** — super_admin 1 belgili
+   parol bilan hisob yarata olardi. Endi hamma joyda (yaratish, yangilash,
+   `cmd/api`ning o'zi ishga tushganda bootstrap qiladigan birinchi
+   super_admin) kamida 8 belgi talab qilinadi (`auth.MinPasswordLength`,
+   yagona joyda belgilangan).
+5. **Admin hisobini o'chirishdan boshqa hech narsa qilib bo'lmasdi** —
+   `PATCH /api/admins/{id}` umuman yo'q edi: parolni yangilash, rolni
+   o'zgartirish, faolsizlantirish (o'chirib tashlamasdan — bu
+   `audit_logs.actor_admin_id`ning o'sha hisobning oldingi amallariga
+   bog'lanishini saqlaydi, `DELETE` esa uni `NULL`ga aylantiradi) va
+   endi — qaror #7'ning IP/MAC cheklovini o'rnatish/o'chirish imkoniyati
+   yo'q edi. Yangi endpoint (faqat `requireSuperAdmin`) hammasini beradi.
+6. **Oxirgi faol super_admin'ni o'chirib/faolsizlantirib/pasaytirib
+   bo'lardi** — bu butun panelni abadiy qulflab qo'yardi (hech kim
+   `requireSuperAdmin` talab qiladigan hech narsaga kira olmay qolardi,
+   hatto yangi super_admin yaratishga ham). Endi ham `DELETE`, ham
+   `PATCH` (faolsizlantirish yoki rolni pasaytirish) oxirgi faol
+   super_admin'ga tegishli bo'lsa rad etiladi.
+7. **IP/MAC login cheklovi endi haqiqatan ishlaydi**: `handleLogin`
+   parol **va** (agar sozlangan bo'lsa) 2FA tasdiqlangandan **keyin**
+   (TOTP xabari bilan bir xil mantiq — bu bosqichga yetgan chaqiruvchi
+   allaqachon parolni bilgani uchun, "bu tarmoqdan kirish taqiqlangan"
+   degan aniq xabar hisob mavjudligini oshkor qilish xavfi emas) IP'ni
+   Postgres'ning o'z `INET` konteynerlik operatori (`<<=`) bilan
+   tekshiradi (yagona IP HAM, CIDR oralig'i HAM ishlaydi), MAC uchun esa
+   — **API'ning o'zi hech qachon xom tarmoq huquqiga ega bo'lmasligi
+   kerak** (bo'lim 4) tamoyiliga rioya qilib — `/proc/net/arp`ni
+   to'g'ridan-to'g'ri o'qimaydi, balki `netdiscd`ning o'zi (Phase 1)
+   allaqachon `devices` jadvaliga yozgan haqiqiy ARP ma'lumotidan
+   (`devices.ip_address` → `devices.mac_address`) foydalanadi. Agar IP
+   hech qachon aniqlanmagan bo'lsa (`allowed_mac` sozlangan holda) —
+   **fail-closed**: tekshirib bo'lmagan qurilma ishonilmaydi.
+
+**Tekshirilib, muammosiz topilgan qismlar (kod o'zgartirilmadi):**
+
+- **SQL injection** — butun kod bazasida (barcha `internal/*` paketlar)
+  faqat parametrlangan so'rovlar (`$1`, `$2`, ...); hech qanday joyda
+  foydalanuvchi ma'lumoti SQL matniga to'g'ridan-to'g'ri qo'shilmagan.
+- **XSS** — `web/src`da bitta ham `dangerouslySetInnerHTML`/`eval` yo'q;
+  React standart JSX escaping'iga to'liq tayanadi.
+- **CSRF** — amal qilmaydi: JWT `Authorization` sarlavhasi orqali
+  yuboriladi (`localStorage`da saqlanadi), cookie orqali emas — brauzer
+  hech qachon uni boshqa origin'ning so'roviga avtomatik qo'shmaydi.
+- **JWT algoritm almashtirish hujumi** — `auth.ParseToken` allaqachon
+  imzolash usuli aniq HMAC oilasidan ekanini tekshiradi (`alg: none` yoki
+  RS256→HMAC almashtirish urinishlarini rad etadi).
+- **Mass assignment** — `decodeJSON` `DisallowUnknownFields()` ishlatadi,
+  har bir endpoint o'zining aniq `...Request` struct'iga ega — kutilmagan
+  JSON maydoni har doim rad etiladi.
+- **Path traversal** (pcap yuklab olish) — `file_path` doim
+  server tomonida (`capdsync.NewFilePath`) generatsiya qilinadi, hech
+  qachon mijozdan kelmaydi.
+- **`npm audit`** (web/) — 0 ta zaiflik.
+- **RBAC qamrovi** — `internal/httpapi/server.go`dagi barcha 30+
+  endpoint qo'lda tekshirildi: har bir o'zgartiruvchi amal `requireAuth`
+  ostida, admin boshqaruvi (`/api/admins/*`) qo'shimcha
+  `requireSuperAdmin` ostida. Oddiy `admin`ning o'zini `super_admin`ga
+  ko'tarish yo'li topilmadi (`handleCreateAdmin`/`handleUpdateAdmin`
+  ikkalasi ham allaqachon `requireSuperAdmin` guruhida).
+- **Audit log to'liqligi** — barcha o'zgartiruvchi endpoint'lar
+  (admin/LAN/server-group/backend/capture) allaqachon `recordAudit`
+  chaqirardi; yagona bo'shliq — autentifikatsiya voqealari — yuqorida
+  #3'da tuzatildi.
+
+**Tekshirilolmagan/hujjatlashtirilgan cheklovlar:**
+
+- **`govulncheck`** bu sandbox'da ishlamadi — tarmoq siyosati
+  `vuln.go.dev`ni bloklaydi (`403` proksi darajasida). `go.mod`dagi barcha
+  bog'liqliklar qo'lda ko'rib chiqildi (versiyalar yangi ko'rinadi), lekin
+  haqiqiy CVE skaneri ishlaydigan muhitda (masalan CI) ishga tushirilishi
+  tavsiya etiladi.
+- **`ALLOWED_ORIGINS=*`** (standart) — bu ilova token'ni cookie'da emas,
+  `Authorization` sarlavhasi + `localStorage`da saqlagani uchun hozircha
+  amaliy jihatdan xavfli emas (CORS+credentials klassik xavfi cookie'ga
+  tayanadi), lekin ishlab chiqarishda buni haqiqiy panel domenига
+  tor qilib sozlash tavsiya etiladi (`docs/deploy.md`ga qo'shildi).
+- **JWT bekor qilish ro'yxati (revocation list) yo'q** — lekin #1'dagi
+  `is_active` tekshiruvi buni amalda keraksiz qiladi: o'chirilgan/
+  faolsizlantirilgan hisobning tokeni **keyingi so'rovdayoq** ishlamay
+  qoladi, alohida bekor qilish do'koni kerak bo'lmaydi.
+- 2 ta admin-only endpoint (`capture_handlers.go`, `lan_handlers.go`)
+  xato matnini (`err.Error()`) mijozga qaytaradi — faqat autentifikatsiya
+  qilingan adminlar ko'radi, operatsion jihatdan foydali (masalan "wgd
+  ishlamayapti: ..."), shuning uchun o'zgartirilmadi.
+
+**Sinov — real Postgres + real `cmd/api` + real brauzer (Playwright),
+soxta ma'lumot yo'q:**
+
+1. **Tezlik cheklovi**: bitta IP'dan 5 ta ketma-ket noto'g'ri parol —
+   birinchi 5tasi `401`, 6-chisi `429` qaytardi; to'g'ri parol bilan ham
+   shu oynada `429` qaytishi tasdiqlandi (limiter hisob ma'lumotiga emas,
+   IP'ga qarab ishlaydi).
+2. **Audit**: 5 ta muvaffaqiyatsiz urinish — 5 ta `auth.login_failed`
+   qatori (har biri `reason`/`username`/`ip` bilan); muvaffaqiyatli kirish
+   — `auth.login_success`; noma'lum login — `target_id = NULL`.
+3. **`requireAuth`ning DB tekshiruvi**: yangi admin yaratilib, u orqali
+   kirilib, keyin `PATCH .../is_active=false` bilan faolsizlantirilgach —
+   **aynan o'sha, hali muddati o'tmagan** JWT bilan `GET /api/auth/me`
+   chaqirilganda **darhol** `401` qaytdi (avval — token muddati tugagunча
+   ishlardi).
+4. **Oxirgi super_admin himoyasi**: o'zini o'zi faolsizlantirish/pasaytirish/
+   o'chirish — barchasi rad etildi ("cannot ... your own account");
+   `isLastActiveSuperAdmin`ning ichki SQL mantig'i haqiqiy ma'lumotga
+   qarshi to'g'ridan-to'g'ri tekshirilib, kutilgan natijani berdi (chunki
+   API orqali oxirgi super_admin'ni FAQAT o'zi nishonlay oladi — bu esa
+   allaqachon "o'zini o'zi" tekshiruvi bilan qamrab olingan; ikkalasi ham
+   qoldirildi — mudofaa chuqurligi, kelajakda "o'zini o'zi" tekshiruvi
+   olib tashlansa ham qulflanib qolishni oldini oladi).
+5. **IP cheklovi**: `allowed_ip=10.0.0.0/24` bilan yaratilgan hisob
+   `127.0.0.1`dan kira olmadi (`403`, "cannot log in from this network");
+   `allowed_ip=127.0.0.1`ga yangilangach kirish muvaffaqiyatli bo'ldi.
+6. **MAC cheklovi**: haqiqiy `devices` qatori (`ip=127.0.0.1`,
+   ma'lum MAC) yaratilib, `allowed_mac` boshqa MAC'ga sozlanganda kirish
+   rad etildi; haqiqiy MAC'ga sozlanganda muvaffaqiyatli bo'ldi.
+7. **Adminlar sahifasi haqiqiy brauzerda** (Playwright): yangi IP/MAC
+   ustuni, Holat (Faol/Faolsizlantirilgan) tugmasi to'g'ri ko'rindi;
+   tugma bosilganda `PATCH` chaqirilib, holat jonli yangilandi — konsolda
+   bironta xatosiz.
+
 ### ⏳ Hali yozilmagan (har sahifada halol "Phase X'da qo'shiladi" deb yozilgan, soxta ma'lumot yo'q)
 
-| Bosqich | Nima | Fayllar (hali yo'q) |
-|---|---|---|
-| Phase 10 | RBAC'ning API bo'ylab to'liq qo'llanilishi, xavfsizlik audit, dizayn siyqallashtirish | — |
+Hozircha yo'q — bo'lim 2.3'dagi barcha talablar va bo'lim 8'dagi barcha
+bosqichlar (Phase 0–10) real sinovlar bilan yopilgan.
 
 ---
 
@@ -1289,35 +1453,30 @@ deploy (Docker Compose + systemd) uchun: `docs/deploy.md`.
 
 Phase 1 (`netdiscd`), Phase 2 (`fwctl`), Phase 3 (Gateway/DHCP/NAT),
 Phase 4 (`lbd`), Phase 5 (`backendagentd`), Phase 6 (`capd`), Phase 7
-(`wgd`), Phase 8 (backend trafik hisobi + GPU metrikasi) va Phase 9 (LAN
-tarmoqlarini avtomatik aniqlash + port/LAN drill-down) tayyor va real
-sinaldi — bo'lim 8'ga qarang. Bo'lim 2.3'dagi "Har bir bo'lim uchun
-talablar" jadvalidagi **barcha qatorlar** endi haqiqiy, ishlaydigan
-funksionallik bilan qoplangan: bu server to'liq ishlaydigan LAN gateway,
-load balancer, trafik yozib oluvchi tizim **va** site-to-site VPN — DHCP
-beradi, kirish huquqini nazorat qiladi, ruxsat berilganlarni internetga
-NAT bilan chiqaradi, `lan_forward`dagi ruxsat berilgan trafikni haqiqiy
-VIP'lar orqali orqadagi serverlarga taqsimlaydi (va har bir userning
-qaysi serverga qancha trafik ishlatganini hisoblaydi), har bir backend
-serverning o'z host metrikasi (CPU/RAM/Disk/tarmoq **va GPU**, mavjud
-bo'lsa) ko'rinadi, admin istalgan userning trafigini on-demand pcap
-sifatida yozib Wireshark'da tekshira oladi, masofadagi ikkinchi LAN
-tarmog'i haqiqiy, shifrlangan WireGuard tuneli orqali bog'lanib, LAN
-sahifasida Active/Deactive qilinadi va real-vaqtda reachability'i
-ko'rinadi, va endi LAN sahifasi har bir wired switch/wireless SSID uchun
-ham o'z tarmoq qatorini avtomatik ko'rsatib, istalgan port yoki LAN
-tarmog'i bosilganda faqat o'sha ichidagi qurilmalarni filtrlab beradi.
+(`wgd`), Phase 8 (backend trafik hisobi + GPU metrikasi), Phase 9 (LAN
+tarmoqlarini avtomatik aniqlash + port/LAN drill-down) va Phase 10
+(xavfsizlik audit — bo'lim 8'ga qarang) tayyor va real sinaldi. Bo'lim
+2.3'dagi "Har bir bo'lim uchun talablar" jadvalidagi **barcha qatorlar**
+endi haqiqiy, ishlaydigan funksionallik bilan qoplangan: bu server
+to'liq ishlaydigan LAN gateway, load balancer, trafik yozib oluvchi
+tizim **va** site-to-site VPN — DHCP beradi, kirish huquqini nazorat
+qiladi, ruxsat berilganlarni internetga NAT bilan chiqaradi,
+`lan_forward`dagi ruxsat berilgan trafikni haqiqiy VIP'lar orqali
+orqadagi serverlarga taqsimlaydi (va har bir userning qaysi serverga
+qancha trafik ishlatganini hisoblaydi), har bir backend serverning o'z
+host metrikasi (CPU/RAM/Disk/tarmoq **va GPU**, mavjud bo'lsa) ko'rinadi,
+admin istalgan userning trafigini on-demand pcap sifatida yozib
+Wireshark'da tekshira oladi, masofadagi ikkinchi LAN tarmog'i haqiqiy,
+shifrlangan WireGuard tuneli orqali bog'lanib, LAN sahifasida
+Active/Deactive qilinadi va real-vaqtda reachability'i ko'rinadi, LAN
+sahifasi har bir wired switch/wireless SSID uchun ham o'z tarmoq qatorini
+avtomatik ko'rsatib, istalgan port yoki LAN tarmog'i bosilganda faqat
+o'sha ichidagi qurilmalarni filtrlab beradi, va endi butun autentifikatsiya
+zanjiri (login tezlik cheklovi, IP/MAC tarmoq cheklovi, tokenning har
+so'rovda haqiqiy hisob holatiga qarshi qayta tekshirilishi, to'liq audit
+izi) qaror #7 va #16'ning aynan o'zi talab qilgan darajada ishlaydi.
 
-Navbatdagi ish — **Phase 10: RBAC'ning API bo'ylab to'liq qo'llanilishi,
-xavfsizlik audit, dizayn siyqallashtirish** — bu endi yangi tarmoq
-funksiyasi emas, balki mavjud bosqichlarni qattiqlashtirish bosqichi:
-har bir endpoint'ning `requireAuth`/`requireSuperAdmin` qo'llanilishini
-qayta ko'rib chiqish, xavfsizlik zaifliklarini qidirish (masalan admin
-JWT muddati, parol siyosati, audit log to'liqligi), va to'planib qolgan
-kichik UI/UX nomutanosibliklarni tekshirish. Bu boshqa bosqichlardan
-farqli — aniq bitta yangi daemon yoki funksiya emas, shuning uchun
-boshlashdan oldin foydalanuvchidan aniq qamrov so'rash kerak bo'ladi
-(masalan: "audit" nimani anglatadi — kod review'mi, avtomatlashtirilgan
-xavfsizlik skaneri, yoki muayyan zaifliklarni qidirishmi). Har bosqich
-tugagach ushbu faylni va `README.md`/`docs/deploy.md`ni yangilab borish
-tavsiya etiladi.
+Bo'lim 2.3'dagi barcha talablar va bo'lim 8'dagi barcha bosqichlar
+(Phase 0–10) endi real sinovlar bilan yopilgan — hozircha rejalashtirilgan
+yangi bosqich yo'q. Keyingi ish, agar bo'lsa, foydalanuvchining yangi
+so'rovi bilan belgilanadi.

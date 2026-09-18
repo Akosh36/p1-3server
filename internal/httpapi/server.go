@@ -16,12 +16,13 @@ import (
 )
 
 type Server struct {
-	pool *pgxpool.Pool
-	cfg  *config.Config
+	pool         *pgxpool.Pool
+	cfg          *config.Config
+	loginLimiter *loginLimiter
 }
 
 func New(pool *pgxpool.Pool, cfg *config.Config) *Server {
-	return &Server{pool: pool, cfg: cfg}
+	return &Server{pool: pool, cfg: cfg, loginLimiter: newLoginLimiter()}
 }
 
 func (s *Server) Router() http.Handler {
@@ -88,6 +89,7 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.requireSuperAdmin)
 			r.Get("/api/admins", s.handleListAdmins)
 			r.Post("/api/admins", s.handleCreateAdmin)
+			r.Patch("/api/admins/{id}", s.handleUpdateAdmin)
 			r.Delete("/api/admins/{id}", s.handleDeleteAdmin)
 		})
 	})

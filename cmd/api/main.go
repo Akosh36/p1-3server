@@ -111,6 +111,10 @@ func bootstrapSuperAdmin(ctx context.Context, pool *pgxpool.Pool) error {
 		slog.Warn("no admins exist yet and BOOTSTRAP_ADMIN_USERNAME/BOOTSTRAP_ADMIN_PASSWORD are unset; set them and restart to create the first super_admin")
 		return nil
 	}
+	if len(password) < auth.MinPasswordLength {
+		slog.Error("BOOTSTRAP_ADMIN_PASSWORD is too short; set a longer one and restart", "min_length", auth.MinPasswordLength)
+		return nil
+	}
 
 	hash, err := auth.HashPassword(password)
 	if err != nil {

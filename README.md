@@ -35,7 +35,7 @@ kira olmaydi (default-deny).
 | Phase 7 | `wgd` — site-to-site WireGuard (masofaviy Wireless LAN) | ✅ Tayyor |
 | Phase 8 | Backend trafik hisobi (userga qarab) + GPU metrikasi | ✅ Tayyor |
 | Phase 9 | LAN avtomatik tarmoq yaratish + port/LAN drill-down | ✅ Tayyor |
-| Phase 10 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ⏳ Keyingi |
+| Phase 10 | RBAC to'liq qo'llanilishi, xavfsizlik audit | ✅ Tayyor |
 
 Hozirgi holatda: `netdiscd` LAN qurilmalarini ARP jadvali, dnsmasq lease
 fayli, SNMP (boshqariladigan switch) va hostapd (lokal WiFi) orqali avtomatik
@@ -158,6 +158,23 @@ ega: bosilganda pastdagi qurilmalar ro'yxati faqat o'sha port/tarmoqqa
 tegishlilarga filtrlanadi. Ikkalasi ham haqiqiy Postgres + haqiqiy
 `cmd/api` (`internal/discovery`) + real brauzer bilan sinaldi.
 
+Va nihoyat, to'liq xavfsizlik audit (Phase 10) o'tkazilib, eng jiddiy
+topilma tuzatildi: `requireAuth` JWT'ni faqat imzo/muddat bo'yicha
+tekshirardi, bazani hech qachon qayta so'ramasdi — o'chirilgan yoki
+faolsizlantirilgan admin'ning eski tokeni muddati tugagunча (standart 12
+soat) ishlab turaverardi. Endi har bir so'rovda hisob holati Postgres'dan
+qayta o'qiladi. Shu bilan bir qatorda: login endpoint'iga tezlik cheklovi
+(bitta IP'dan 5 daqiqada 5tadan ortiq muvaffaqiyatsiz urinish — 429),
+har bir kirish urinishining (muvaffaqiyatli va muvaffaqiyatsiz) audit
+logga yozilishi, admin parollari uchun minimal uzunlik, oxirgi faol
+super_admin'ni o'chirib/faolsizlantirib qo'yishdan himoya, va — eng
+muhimi — loyihaning boshidan beri "qaror #7" sifatida hujjatlashtirilgan,
+lekin **hech qachon amalga oshirilmagan** admin login'i uchun IP/MAC
+cheklovi (`admins.allowed_ip`/`allowed_mac`) endi haqiqatan ishlaydi.
+Bularning barchasi haqiqiy Postgres + haqiqiy `cmd/api` + real brauzer
+bilan sinaldi (masalan: tezlik cheklovi 6-urinishda `429` qaytardi,
+faolsizlantirilgan admin'ning eski tokeni **darhol** ishlamay qoldi).
+
 ## Loyiha tuzilmasi
 
 ```
@@ -174,7 +191,8 @@ internal/
   db/                  Postgres ulanish + o'rnatilgan (embed) migratsiyalar
   models/              Domen tiplari
   auth/                JWT, bcrypt, TOTP
-  httpapi/             HTTP handlerlar, middleware, router
+  httpapi/             HTTP handlerlar, middleware, router; login tezlik cheklovi
+                       va IP/MAC cheklovi (Phase 10)
   hostmetrics/          CPU/RAM/Disk/Net sampler (gopsutil) — metrics VA backendagentd
                         ikkalasi ham shu yerdan foydalanadi; gpu.go — nvidia-smi
                         asosida GPU foizi, topilmasa nil (soxta 0 emas)
